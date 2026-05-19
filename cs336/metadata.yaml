@@ -1,0 +1,9 @@
+course: "CS336: Language Modeling from Scratch"
+institution: Stanford University
+year: 2026
+term: Spring 2026
+instructors:
+  - Tatsunori Hashimoto
+  - Percy Liang
+url: https://cs336.stanford.edu/
+slides_repo: https://github.com/stanford-cs336/lectures

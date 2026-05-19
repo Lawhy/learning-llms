@@ -1,3 +1,3 @@
-[submodule "cs336/assignments/assignment1-basics"]
-	path = cs336/assignments/assignment1-basics
+[submodule "materials/cs336/assignments/assignment1-basics"]
+	path = materials/cs336/assignments/assignment1-basics
 	url = https://github.com/Lawhy/assignment1-basics.git

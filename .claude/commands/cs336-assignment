@@ -129,3 +129,29 @@ The `ready: true` frontmatter field gates whether the page appears as a clickabl
 - In-progress content is a normal state for a learning archive; pretending nothing exists until everything's done is misleading
 
 Concretely: flip `ready: true` the moment you've finished writing the first problem's answer and recorded it. The page's *content* communicates whether it's in progress or complete — the flag only gates discoverability.
+
+## §9. Margin notes (Tufte-style sidenotes)
+
+The template inherits right-gutter margin notes from the blog. Use them when a thought is *worth saying* but breaks the spine of the answer — caveats, cross-references, side observations, common pitfalls, optional rabbit holes. Keep the main answer clean; let the gutter carry the tangential.
+
+**Pattern** (each note needs a unique number per page; the `<sup>` marker sits inline where the digression branches off, and the floating note carries the actual content):
+
+```html
+…the main sentence ends here.<sup class="margin-marker"><a href="#note-1">1</a></sup><span class="margin-note" id="note-1"><span class="margin-note__label">Note 1</span>One or two sentences of tangential commentary that would have interrupted the flow if inlined.</span>
+```
+
+On wide screens the note floats into the right gutter aligned with its marker; below ~1100px it collapses to an inline callout. `scrollspy.js` intercepts the marker click so it doesn't scroll-jump.
+
+**When to use a margin note:**
+- A nuance, caveat, or "gotcha" that would derail the main answer
+- "See also" pointers to a specific lecture, paper, or earlier problem
+- A short observation about *why* the implementation works the way it does
+- A common pitfall the student might hit later in the assignment
+
+**When NOT to use:**
+- Critical information — that belongs inline in the answer
+- Long explanations (more than ~2 sentences) — promote to a new paragraph instead
+- Code snippets — fenced code blocks go inline
+- Things the student got wrong — that's feedback in your reply, not a permanent note in their answer
+
+A good rhythm: each finalized problem answer might have 0–2 margin notes. More than that usually means the main text needs restructuring, not more gutter material.

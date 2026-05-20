@@ -1068,6 +1068,18 @@ body {
   font-size: 0.92em;
 }
 
+/* Small uppercase annotation directly under a problem/section heading
+   (e.g. point values). Quieter than body text, doesn't compete with h2/h3. */
+.post-body .heading-meta {
+  display: block;
+  margin: -0.6rem 0 1.4rem;
+  font-family: var(--sans);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+
 /* Inline marker that points to a margin note. Renders as a small coral
    superscript, like a Tufte-style sidenote number. */
 .post-body .margin-marker {

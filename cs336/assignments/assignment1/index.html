@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Newsreader:opsz,wght@6..72,500;6..72,600;6..72,700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
-  <link rel="stylesheet" href="../../../assets/css/site.css?v=c002e49d">
+  <link rel="stylesheet" href="../../../assets/css/site.css?v=5df6ac68">
   <link rel="stylesheet" href="../../../assets/css/syntax.css?v=b0d391e6">
 </head>
 <body class="">
@@ -23,15 +23,39 @@
       <nav class="left-toc" aria-label="Table of contents">
         <span class="toc-marker" aria-hidden="true"></span>
         <ul>
-
+          <li><a href="#problem-unicode1-understanding-unicode" data-toc>Problem unicode1 — Understanding Unicode</a></li>
+          <li><a href="#problem-unicode2-unicode-encodings" data-toc>Problem unicode2 — Unicode Encodings</a></li>
         </ul>
       </nav>
 
       <article class="content">
         <div class="post-body post-body--notes">
-<p><em>Not yet attempted.</em></p>
-<p>Assignment PDF: <a href="https://github.com/Lawhy/assignment1-basics/blob/main/cs336_assignment1_basics.pdf"><code>cs336_assignment1_basics.pdf</code></a>
-Code: <a href="https://github.com/Lawhy/assignment1-basics"><code>assignment1-basics/</code></a></p>
+<p><span class="margin-note" id="resources"><span class="margin-note__label">Resources</span><span class="icon-list"><a href="./cs336_assignment1_basics.pdf"><svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg><span>Assignment PDF</span></a><br><a href="https://github.com/Lawhy/assignment1-basics"><svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.55v-2.13c-3.2.69-3.87-1.34-3.87-1.34-.52-1.31-1.27-1.66-1.27-1.66-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.68 1.24 3.34.95.1-.74.4-1.24.72-1.53-2.55-.29-5.23-1.28-5.23-5.69 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.79 0c2.21-1.49 3.18-1.18 3.18-1.18.62 1.58.23 2.75.11 3.04.73.81 1.18 1.84 1.18 3.1 0 4.42-2.69 5.4-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.66.8.55C20.71 21.39 24 17.08 24 12 24 5.65 18.85.5 12 .5z"/></svg><span>Code Base</span></a></span></span></p>
+<h2 id="problem-unicode1-understanding-unicode">Problem <code>unicode1</code> — Understanding Unicode</h2>
+<p><span class="heading-meta">1 point total</span></p>
+<h3 id="a-chr0">(a) <code>chr(0)</code></h3>
+<p><strong>Question:</strong> What Unicode character does <code>chr(0)</code> return?</p>
+<p><strong>Answer:</strong> The null character, U+0000 (NUL) — Python represents it as the single-character string <code>'\x00'</code>.</p>
+<h3 id="b-__repr__-vs-printed-form">(b) <code>__repr__()</code> vs printed form</h3>
+<p><strong>Question:</strong> How does this character&rsquo;s string representation (<code>__repr__()</code>) differ from its printed representation?</p>
+<p><strong>Answer:</strong> <code>__repr__()</code> returns the escape-sequence form <code>'\x00'</code> (printable, unambiguous, suitable for eval-roundtripping), while <code>print(chr(0))</code> emits the actual NUL control byte, which is non-printing and therefore invisible in the output.</p>
+<h3 id="c-nul-inside-a-string">(c) NUL inside a string</h3>
+<p><strong>Question:</strong> What happens when this character occurs in text? (e.g., <code>"this is a test" + chr(0) + "string"</code> and <code>print(...)</code> of the same.)</p>
+<p><strong>Answer:</strong> The null character is a <strong>single</strong> regular character within the Python string (it does not terminate the string as in C), but because it is a non-printing control character it is silently invisible when printed.</p>
+<hr />
+<h2 id="problem-unicode2-unicode-encodings">Problem <code>unicode2</code> — Unicode Encodings</h2>
+<p><span class="heading-meta">3 points total</span></p>
+<h3 id="a-why-utf-8-over-utf-16-utf-32">(a) Why UTF-8 over UTF-16 / UTF-32</h3>
+<p><strong>Question:</strong> What are some reasons to prefer training our tokenizer on UTF-8 encoded bytes, rather than UTF-16 or UTF-32?</p>
+<p><strong>Answer:</strong> UTF-8 uses fewer bytes (one byte per ASCII character, vs. 2 or 4 in UTF-16/UTF-32) and avoids the wasted null-padding bytes that those wider encodings produce; otherwise a BPE tokenizer would spend extra time and vocabulary &ldquo;merges&rdquo; on those noisy, redundant null-byte patterns.</p>
+<h3 id="b-why-per-byte-decoding-is-incorrect">(b) Why per-byte decoding is incorrect</h3>
+<p><strong>Question:</strong> Why is <code>decode_utf8_bytes_to_str_wrong</code> (which decodes each byte individually) incorrect? Provide an example input that breaks it.</p>
+<p><strong>Example input:</strong> <code>"こんにちは".encode("utf-8")</code> → <code>b'\xe3\x81\x93\xe3\x82\x93\xe3\x81\xab\xe3\x81\xa1\xe3\x81\xaf'</code>.</p>
+<p><strong>Answer:</strong> Decoding each byte individually fails because multi-byte UTF-8 characters can&rsquo;t be split — each constituent byte (a leading byte like <code>\xe3</code> or a continuation byte like <code>\x81</code>) is not itself a valid UTF-8 character, so <code>bytes([b]).decode("utf-8")</code> raises <code>UnicodeDecodeError</code>.</p>
+<h3 id="c-a-two-byte-sequence-that-does-not-decode">(c) A two-byte sequence that does not decode</h3>
+<p><strong>Question:</strong> Give a two-byte sequence that does not decode to any Unicode character(s).</p>
+<p><strong>Example:</strong> <code>b"\xc0\xaf"</code>.</p>
+<p><strong>Answer:</strong> Structurally this looks like a 2-byte lead (<code>\xc0</code> = <code>110 00000</code>) followed by a continuation byte (<code>\xaf</code> = <code>10 101111</code>), but stripping the framing bits yields codepoint <code>0x2F</code> (<code>/</code>), which is ASCII and must be encoded in a single byte; UTF-8 forbids such <em>overlong encodings</em>, so the decoder rejects <code>\xc0</code> outright as an invalid start byte.</p>
         </div>
       </article>
     </div>

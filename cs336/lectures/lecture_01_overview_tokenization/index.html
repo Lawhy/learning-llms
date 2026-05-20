@@ -23,34 +23,14 @@
       <nav class="left-toc" aria-label="Table of contents">
         <span class="toc-marker" aria-hidden="true"></span>
         <ul>
-          <li><a href="#why-tokenization-is-non-trivial" data-toc>Why tokenization is non-trivial</a></li>
-          <li><a href="#a-bit-of-math-compression-ratio" data-toc>A bit of math: compression ratio</a></li>
-          <li><a href="#where-this-connects" data-toc>Where this connects</a></li>
-          <li><a href="#open-questions" data-toc>Open questions</a></li>
+
         </ul>
       </nav>
 
       <article class="content">
         <div class="post-body post-body--notes">
-<p>Course intro + the tokenization problem: how do we turn a byte stream into the discrete units a transformer consumes?</p>
+<p><em>Notes not yet written.</em></p>
 <p>Slides: <a href="./slides.pdf"><code>slides.pdf</code></a></p>
-<h2 id="why-tokenization-is-non-trivial">Why tokenization is non-trivial</h2>
-<p>Bytes are too fine-grained (long sequences, wasted compute on common prefixes); words are too coarse (open vocabulary, brittle to morphology and non-Latin scripts). The compromise is <strong>subword tokenization</strong> — units that are common-substring-frequent in the training corpus.</p>
-<p>The standard choice in modern LLMs is <strong>Byte-Pair Encoding (BPE)</strong>, which greedily merges the most frequent adjacent token pair until a target vocabulary size is reached.</p>
-<h2 id="a-bit-of-math-compression-ratio">A bit of math: compression ratio</h2>
-<p>Given a corpus of $N$ bytes encoded into $T$ tokens by a tokenizer, the <strong>compression ratio</strong> is</p>
-<p>$$ r = \frac{N}{T} $$</p>
-<p>Higher $r$ means a token &ldquo;carries&rdquo; more bytes on average — a proxy for vocabulary efficiency. Typical BPE vocabularies achieve $r \approx 4$ on English text.</p>
-<h2 id="where-this-connects">Where this connects</h2>
-<ul>
-<li>The next lecture, <a href="../lecture_02_pytorch_einops_resource_accounting/" class="wiki-link">Lecture 2 — PyTorch, einops, resource accounting</a>, grounds these abstractions in PyTorch and starts the resource-accounting habit (FLOPs, bytes, latency).</li>
-<li>The first hands-on is <a href="../../assignments/assignment1/" class="wiki-link">Assignment 1</a>, which has you implement a BPE tokenizer from scratch.</li>
-</ul>
-<h2 id="open-questions">Open questions</h2>
-<ul>
-<li>How sensitive are downstream metrics to tokenizer choice when vocabulary size is held constant?</li>
-<li>What does tokenizer-induced bias look like for multilingual corpora — and can it be measured without training a full model?</li>
-</ul>
         </div>
       </article>
     </div>

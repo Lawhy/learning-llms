@@ -23,74 +23,15 @@
       <nav class="left-toc" aria-label="Table of contents">
         <span class="toc-marker" aria-hidden="true"></span>
         <ul>
-          <li><a href="#problem-1-pre-tokenization-chunking" data-toc>Problem 1 — Pre-tokenization chunking</a></li>
-          <li><a href="#problem-2-bpe-training-stub" data-toc>Problem 2 — BPE training [stub]</a></li>
-          <li><a href="#notes" data-toc>Notes</a></li>
+
         </ul>
       </nav>
 
       <article class="content">
         <div class="post-body post-body--notes">
-<p>Implement a BPE tokenizer and the core transformer building blocks from scratch. Code lives in the <a href="https://github.com/Lawhy/assignment1-basics"><code>assignment1-basics</code></a> submodule; assignment PDF is <a href="https://github.com/Lawhy/assignment1-basics/blob/main/cs336_assignment1_basics.pdf"><code>cs336_assignment1_basics.pdf</code></a>.</p>
-<p>Tracks the conceptual ground from <a href="../../lectures/lecture_01_overview_tokenization/" class="wiki-link">Lecture 1</a> and the engineering primitives from <a href="../../lectures/lecture_02_pytorch_einops_resource_accounting/" class="wiki-link">Lecture 2</a>.</p>
-<h2 id="problem-1-pre-tokenization-chunking">Problem 1 — Pre-tokenization chunking</h2>
-<p><strong>Question:</strong> Given a large training file, how do we split it across workers without crossing a special-token boundary (e.g., <code>&lt;|endoftext|&gt;</code>)?</p>
-<p><strong>Answer:</strong> Pick uniformly-spaced byte offsets as initial chunk boundaries, then nudge each boundary forward to the next occurrence of the special token. The assignment provides a reference implementation:</p>
-<p><em>From <code>cs336/assignments/assignment1/assignment1-basics/cs336_basics/pretokenization_example.py::find_chunk_boundaries</code>:</em></p>
-<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">find_chunk_boundaries</span><span class="p">(</span>
-    <span class="n">file</span><span class="p">:</span> <span class="n">BinaryIO</span><span class="p">,</span>
-    <span class="n">desired_num_chunks</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">split_special_token</span><span class="p">:</span> <span class="nb">bytes</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Chunk the file into parts that can be counted independently.</span>
-<span class="sd">    May return fewer chunks if the boundaries end up overlapping.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">split_special_token</span><span class="p">,</span> <span class="nb">bytes</span><span class="p">),</span> <span class="s2">&quot;Must represent special token as a bytestring&quot;</span>
-
-    <span class="c1"># Get total file size in bytes</span>
-    <span class="n">file</span><span class="o">.</span><span class="n">seek</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">SEEK_END</span><span class="p">)</span>
-    <span class="n">file_size</span> <span class="o">=</span> <span class="n">file</span><span class="o">.</span><span class="n">tell</span><span class="p">()</span>
-    <span class="n">file</span><span class="o">.</span><span class="n">seek</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-
-    <span class="n">chunk_size</span> <span class="o">=</span> <span class="n">file_size</span> <span class="o">//</span> <span class="n">desired_num_chunks</span>
-
-    <span class="c1"># Initial guesses for chunk boundary locations, uniformly spaced</span>
-    <span class="c1"># Chunks start on previous index, don&#39;t include last index</span>
-    <span class="n">chunk_boundaries</span> <span class="o">=</span> <span class="p">[</span><span class="n">i</span> <span class="o">*</span> <span class="n">chunk_size</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">desired_num_chunks</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)]</span>
-    <span class="n">chunk_boundaries</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">file_size</span>
-
-    <span class="n">mini_chunk_size</span> <span class="o">=</span> <span class="mi">4096</span>  <span class="c1"># Read ahead by 4k bytes at a time</span>
-
-    <span class="k">for</span> <span class="n">bi</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">chunk_boundaries</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
-        <span class="n">initial_position</span> <span class="o">=</span> <span class="n">chunk_boundaries</span><span class="p">[</span><span class="n">bi</span><span class="p">]</span>
-        <span class="n">file</span><span class="o">.</span><span class="n">seek</span><span class="p">(</span><span class="n">initial_position</span><span class="p">)</span>  <span class="c1"># Start at boundary guess</span>
-        <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
-            <span class="n">mini_chunk</span> <span class="o">=</span> <span class="n">file</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="n">mini_chunk_size</span><span class="p">)</span>  <span class="c1"># Read a mini chunk</span>
-
-            <span class="c1"># If EOF, this boundary should be at the end of the file</span>
-            <span class="k">if</span> <span class="n">mini_chunk</span> <span class="o">==</span> <span class="sa">b</span><span class="s2">&quot;&quot;</span><span class="p">:</span>
-                <span class="n">chunk_boundaries</span><span class="p">[</span><span class="n">bi</span><span class="p">]</span> <span class="o">=</span> <span class="n">file_size</span>
-                <span class="k">break</span>
-
-            <span class="c1"># Find the special token in the mini chunk</span>
-            <span class="n">found_at</span> <span class="o">=</span> <span class="n">mini_chunk</span><span class="o">.</span><span class="n">find</span><span class="p">(</span><span class="n">split_special_token</span><span class="p">)</span>
-            <span class="k">if</span> <span class="n">found_at</span> <span class="o">!=</span> <span class="o">-</span><span class="mi">1</span><span class="p">:</span>
-                <span class="n">chunk_boundaries</span><span class="p">[</span><span class="n">bi</span><span class="p">]</span> <span class="o">=</span> <span class="n">initial_position</span> <span class="o">+</span> <span class="n">found_at</span>
-                <span class="k">break</span>
-            <span class="n">initial_position</span> <span class="o">+=</span> <span class="n">mini_chunk_size</span>
-
-    <span class="c1"># Make sure all boundaries are unique, but might be fewer than desired_num_chunks</span>
-    <span class="k">return</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">chunk_boundaries</span><span class="p">))</span>
-</code></pre></div>
-
-<p>The key invariant: every chunk starts immediately after a special token (or at byte 0), so per-worker pre-tokenization can run independently without re-tokenizing across boundaries.</p>
-<h2 id="problem-2-bpe-training-stub">Problem 2 — BPE training [stub]</h2>
-<p><em>Not yet attempted. The deliverable is a working <code>train(corpus, vocab_size) → (vocab, merges)</code> plus pass <code>uv run pytest tests/test_train_bpe.py</code>.</em></p>
-<h2 id="notes">Notes</h2>
-<ul>
-<li>Tests run with <code>uv run pytest</code> inside the submodule directory.</li>
-</ul>
+<p><em>Not yet attempted.</em></p>
+<p>Assignment PDF: <a href="https://github.com/Lawhy/assignment1-basics/blob/main/cs336_assignment1_basics.pdf"><code>cs336_assignment1_basics.pdf</code></a>
+Code: <a href="https://github.com/Lawhy/assignment1-basics"><code>assignment1-basics/</code></a></p>
         </div>
       </article>
     </div>

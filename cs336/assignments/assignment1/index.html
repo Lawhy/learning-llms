@@ -25,6 +25,11 @@
         <ul>
           <li><a href="#problem-unicode1-understanding-unicode" data-toc>Problem unicode1 — Understanding Unicode</a></li>
           <li><a href="#problem-unicode2-unicode-encodings" data-toc>Problem unicode2 — Unicode Encodings</a></li>
+          <li><a href="#problem-train_bpe-bpe-tokenizer-training" data-toc>Problem train_bpe — BPE Tokenizer Training</a></li>
+          <li><a href="#problem-train_bpe_tinystories-bpe-training-on-tinystories" data-toc>Problem train_bpe_tinystories — BPE Training on TinyStories</a></li>
+          <li><a href="#problem-train_bpe_expts_owt-deferred" data-toc>Problem train_bpe_expts_owt — Deferred</a></li>
+          <li><a href="#problem-tokenizer-implementing-the-tokenizer" data-toc>Problem tokenizer — Implementing the Tokenizer</a></li>
+          <li><a href="#problem-tokenizer_experiments-deferred" data-toc>Problem tokenizer_experiments — Deferred</a></li>
         </ul>
       </nav>
 
@@ -56,6 +61,246 @@
 <p><strong>Question:</strong> Give a two-byte sequence that does not decode to any Unicode character(s).</p>
 <p><strong>Example:</strong> <code>b"\xc0\xaf"</code>.</p>
 <p><strong>Answer:</strong> Structurally this looks like a 2-byte lead (<code>\xc0</code> = <code>110 00000</code>) followed by a continuation byte (<code>\xaf</code> = <code>10 101111</code>), but stripping the framing bits yields codepoint <code>0x2F</code> (<code>/</code>), which is ASCII and must be encoded in a single byte; UTF-8 forbids such <em>overlong encodings</em>, so the decoder rejects <code>\xc0</code> outright as an invalid start byte.</p>
+<hr />
+<p>All BPE work lives in a single class, <code>cs336_basics.bpe.BPETokenizer</code>. Training is a classmethod (<code>BPETokenizer.train</code>) that returns a constructed instance; the same class exposes <code>encode</code> / <code>encode_iterable</code> / <code>decode</code>. Adapters in <code>tests/adapters.py</code> are glue — <code>run_train_bpe</code> calls <code>BPETokenizer.train</code> and unpacks <code>tok.vocab, tok.merges</code>; <code>get_tokenizer</code> just constructs <code>BPETokenizer(vocab, merges, special_tokens)</code>.</p>
+<h2 id="problem-train_bpe-bpe-tokenizer-training">Problem <code>train_bpe</code> — BPE Tokenizer Training</h2>
+<p><span class="heading-meta">15 points</span></p>
+<p><strong>Question:</strong> Train a byte-level BPE tokenizer following §2.4–§2.5: initialize the vocab with the 256 single-byte tokens plus the special tokens, pre-tokenize the corpus with the GPT-2 regex (splitting on special tokens first so merges can&rsquo;t span document boundaries), then iteratively merge the most frequent adjacent byte pair until the vocab reaches <code>vocab_size</code>. Break frequency ties by preferring the <em>lexicographically greater</em> pair.</p>
+<p><strong>Verifying test:</strong> <code>uv run pytest tests/test_train_bpe.py</code> &mdash; <strong>passes (3/3)</strong>.</p>
+<h3 id="pre-tokenization-parallel">Pre-tokenization (parallel)</h3>
+<p>The corpus is split into byte-aligned chunks on occurrences of the first special token (so no chunk slices a document and no merge can span a join), then each chunk is pre-tokenized in its own worker process. Inside a chunk we further split on every special token via <code>re.split</code> with <code>re.escape</code> to neutralize the regex-meta <code>|</code> inside <code>&lt;|endoftext|&gt;</code><sup class="margin-marker"><a href="#note-1">1</a></sup><span class="margin-note" id="note-1"><span class="margin-note__label">Note 1</span>Chunk boundaries only guarantee the chunk <em>starts</em> at a special token — a single chunk still contains thousands of them inside it, so the inner <code>re.split</code> over the full special-token list is still required.</span>, then iterate the GPT-2 regex over each segment.</p>
+<p>Each pre-token is represented as a tuple of <strong>single-byte</strong> <code>bytes</code> objects — <code>tuple(bytes([b]) for b in match.group(0).encode("utf-8"))</code> — so that every atom exists in the initial 256-byte vocab and merges can build them up.<sup class="margin-marker"><a href="#note-2">2</a></sup><span class="margin-note" id="note-2"><span class="margin-note__label">Note 2</span>The tempting bug is <code>tuple(c.encode("utf-8") for c in match.group(0))</code> — but iterating a <code>str</code> yields characters, and a non-ASCII char encodes to multiple bytes, producing an atom that doesn&rsquo;t exist in vocab and can never be built from merges.</span></p>
+<p><code>_pretokenize_chunk</code> runs in a worker subprocess and must be <strong>picklable</strong> (it gets shipped to workers via <code>ProcessPoolExecutor.submit</code>), so it&rsquo;s a <code>@staticmethod</code> rather than a nested function.<sup class="margin-marker"><a href="#note-3">3</a></sup><span class="margin-note" id="note-3"><span class="margin-note__label">Note 3</span>Multiprocessing — not threading or asyncio — is necessary because pre-tokenization is CPU-bound Python (regex scanning + dict updates). Python&rsquo;s GIL serializes threaded CPU work; <code>asyncio.to_thread</code> would inherit the same limitation since it dispatches to a thread pool under the hood.</span></p>
+<p><em>From <code>cs336/assignments/assignment1/assignment1-basics/cs336_basics/bpe.py::BPETokenizer._pretokenize_chunk</code>:</em></p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">_pretokenize_chunk</span><span class="p">(</span>
+        <span class="n">file_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">start</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">end</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">special_tokens</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">bytes</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="nb">int</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Read bytes [start:end) from file_path, split on special tokens, pre-tokenize</span>
+<span class="sd">        each document with the GPT-2 regex, and return a per-pretoken frequency dict.&quot;&quot;&quot;</span>
+        <span class="n">counts</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">bytes</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">file_path</span><span class="p">,</span> <span class="s2">&quot;rb&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">f</span><span class="o">.</span><span class="n">seek</span><span class="p">(</span><span class="n">start</span><span class="p">)</span>
+            <span class="n">chunk</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="n">end</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="s2">&quot;ignore&quot;</span><span class="p">)</span>
+            <span class="n">docs</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;|&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="n">re</span><span class="o">.</span><span class="n">escape</span><span class="p">,</span> <span class="n">special_tokens</span><span class="p">)),</span> <span class="n">chunk</span><span class="p">)</span> <span class="k">if</span> <span class="n">special_tokens</span> <span class="k">else</span> <span class="p">[</span><span class="n">chunk</span><span class="p">]</span>
+            <span class="k">for</span> <span class="n">doc</span> <span class="ow">in</span> <span class="n">docs</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">match</span> <span class="ow">in</span> <span class="n">re</span><span class="o">.</span><span class="n">finditer</span><span class="p">(</span><span class="n">BPETokenizer</span><span class="o">.</span><span class="n">PAT</span><span class="p">,</span> <span class="n">doc</span><span class="p">):</span>
+                    <span class="n">token</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">bytes</span><span class="p">([</span><span class="n">t</span><span class="p">])</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">))</span>
+                    <span class="n">counts</span><span class="p">[</span><span class="n">token</span><span class="p">]</span> <span class="o">=</span> <span class="n">counts</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">token</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span>
+        <span class="k">return</span> <span class="n">counts</span>
+</code></pre></div>
+
+<h3 id="merge-loop-incremental-pair-counts">Merge loop — incremental pair counts</h3>
+<p>The merge step maintains <strong>two indices</strong> across iterations rather than recomputing pair statistics from scratch each round:</p>
+<ul>
+<li><code>pair_counts[(a, b)]</code> — current frequency of pair <code>(a, b)</code> across the corpus.</li>
+<li><code>pair_to_pretokens[(a, b)]</code> — set of pre-tokens currently containing <code>(a, b)</code>. This reverse index makes &ldquo;which pre-tokens are affected by this merge?&rdquo; an O(1) lookup.</li>
+</ul>
+<p>Each merge iteration follows three phases per affected pre-token: <strong>withdraw → rewrite → register</strong>. Withdraw the old shape&rsquo;s contributions from <code>pair_counts</code> and <code>pair_to_pretokens</code>; rewrite the pre-token via <code>_apply_merge</code>; register the new shape&rsquo;s contributions.</p>
+<p><em>From <code>cs336/assignments/assignment1/assignment1-basics/cs336_basics/bpe.py::BPETokenizer._apply_merge</code>:</em></p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">_apply_merge</span><span class="p">(</span><span class="n">pretoken</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">bytes</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="n">pair</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">bytes</span><span class="p">,</span> <span class="nb">bytes</span><span class="p">],</span> <span class="n">merged_token</span><span class="p">:</span> <span class="nb">bytes</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">bytes</span><span class="p">,</span> <span class="o">...</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Rewrite a single pre-token, collapsing every left-to-right occurrence of</span>
+<span class="sd">        `pair` into `merged_token` in one pass.&quot;&quot;&quot;</span>
+        <span class="n">out</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">bytes</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">while</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">pretoken</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">pretoken</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span> <span class="ow">and</span> <span class="p">(</span><span class="n">pretoken</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">pretoken</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">])</span> <span class="o">==</span> <span class="n">pair</span><span class="p">:</span>
+                <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">merged_token</span><span class="p">)</span>
+                <span class="n">i</span> <span class="o">+=</span> <span class="mi">2</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">pretoken</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+                <span class="n">i</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">out</span><span class="p">)</span>
+</code></pre></div>
+
+<p>The single-pass scan in <code>_apply_merge</code> handles <code>(b'a', b'b', b'a', b'b')</code> correctly when merging <code>(b'a', b'b')</code>: both occurrences collapse in one pass, instead of producing two competing &ldquo;merged at one position&rdquo; variants.</p>
+<p>Tie-breaks fall out of Python&rsquo;s tuple comparison: <code>max(pair_counts, key=lambda p: (pair_counts[p], p))</code> automatically prefers the lexicographically greater pair when counts are equal, because <code>bytes</code> compare lexicographically and tuples compare element-wise.<sup class="margin-marker"><a href="#note-4">4</a></sup><span class="margin-note" id="note-4"><span class="margin-note__label">Note 4</span>Workspace data (<code>pair_counts</code>, <code>pair_to_pretokens</code>, <code>pretoken_counts</code>) lives as locals inside <code>train()</code> and is discarded when training finishes — only <code>vocab</code> and <code>merges</code> make it onto the returned <code>BPETokenizer</code> instance. The training scratch is several MB; the durable tokenizer state is a few hundred KB.</span></p>
+<p><em>From <code>cs336/assignments/assignment1/assignment1-basics/cs336_basics/bpe.py::BPETokenizer.train</code>:</em></p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">train</span><span class="p">(</span>
+        <span class="bp">cls</span><span class="p">,</span>
+        <span class="n">input_path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">PathLike</span><span class="p">,</span>
+        <span class="n">vocab_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">special_tokens</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
+        <span class="n">num_processes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
+        <span class="o">**</span><span class="n">_kwargs</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">BPETokenizer</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Train a byte-level BPE tokenizer on the corpus at `input_path`.</span>
+
+<span class="sd">        Returns a constructed BPETokenizer with the trained `vocab` and `merges`.</span>
+<span class="sd">        Algorithm: parallel pre-tokenization → incremental pair-count merge loop.&quot;&quot;&quot;</span>
+
+        <span class="c1"># Initial vocab: 256 single-byte tokens + special tokens.</span>
+        <span class="n">vocab</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">bytes</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="n">i</span><span class="p">:</span> <span class="nb">bytes</span><span class="p">([</span><span class="n">i</span><span class="p">])</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">256</span><span class="p">)}</span>
+        <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">special_tokens</span><span class="p">:</span>
+            <span class="n">vocab</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="n">vocab</span><span class="p">)]</span> <span class="o">=</span> <span class="n">s</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Pre-tokenize the corpus in parallel; result is {pretoken_tuple: frequency}.</span>
+        <span class="n">pretoken_counts</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_pretokenize_corpus</span><span class="p">(</span><span class="n">input_path</span><span class="p">,</span> <span class="n">num_processes</span><span class="p">,</span> <span class="n">special_tokens</span><span class="p">)</span>
+
+        <span class="c1"># Seed the incremental state used by the merge loop:</span>
+        <span class="c1">#   pair_counts[(a,b)]          total occurrences of pair (a,b) in current corpus.</span>
+        <span class="c1">#   pair_to_pretokens[(a,b)]  pre-tokens currently containing the pair;</span>
+        <span class="c1">#                               reverse index for O(affected) work per merge.</span>
+        <span class="n">pair_counts</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">bytes</span><span class="p">,</span> <span class="nb">bytes</span><span class="p">],</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">pair_to_pretokens</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">bytes</span><span class="p">,</span> <span class="nb">bytes</span><span class="p">],</span> <span class="nb">set</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">bytes</span><span class="p">,</span> <span class="o">...</span><span class="p">]]]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">pretoken</span><span class="p">,</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">pretoken_counts</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="k">for</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">pretoken</span><span class="p">,</span> <span class="n">pretoken</span><span class="p">[</span><span class="mi">1</span><span class="p">:]):</span>
+                <span class="n">pair_counts</span><span class="p">[(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)]</span> <span class="o">=</span> <span class="n">pair_counts</span><span class="o">.</span><span class="n">get</span><span class="p">((</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="n">n</span>
+                <span class="n">pair_to_pretokens</span><span class="o">.</span><span class="n">setdefault</span><span class="p">((</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="nb">set</span><span class="p">())</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">pretoken</span><span class="p">)</span>
+
+        <span class="c1"># Merge loop. Each iteration picks the highest-frequency pair (lexicographically</span>
+        <span class="c1"># greater on ties), records it, and patches the incremental state by touching</span>
+        <span class="c1"># only the pre-tokens that actually contained the merged pair.</span>
+        <span class="n">merges</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">bytes</span><span class="p">,</span> <span class="nb">bytes</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">while</span> <span class="nb">len</span><span class="p">(</span><span class="n">vocab</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">vocab_size</span> <span class="ow">and</span> <span class="n">pair_counts</span><span class="p">:</span>
+            <span class="n">best_pair</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">pair_counts</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">p</span><span class="p">:</span> <span class="p">(</span><span class="n">pair_counts</span><span class="p">[</span><span class="n">p</span><span class="p">],</span> <span class="n">p</span><span class="p">))</span>
+            <span class="n">merged_token</span> <span class="o">=</span> <span class="n">best_pair</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">+</span> <span class="n">best_pair</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+            <span class="n">merges</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">best_pair</span><span class="p">)</span>
+            <span class="n">vocab</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="n">vocab</span><span class="p">)]</span> <span class="o">=</span> <span class="n">merged_token</span>
+
+            <span class="n">affected_pretokens</span> <span class="o">=</span> <span class="n">pair_to_pretokens</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">best_pair</span><span class="p">)</span>
+            <span class="n">pair_counts</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">best_pair</span><span class="p">)</span>
+
+            <span class="k">for</span> <span class="n">old_pretoken</span> <span class="ow">in</span> <span class="n">affected_pretokens</span><span class="p">:</span>
+                <span class="n">n</span> <span class="o">=</span> <span class="n">pretoken_counts</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">old_pretoken</span><span class="p">)</span>
+
+                <span class="c1"># Withdraw old_pretoken&#39;s contributions to every pair except best_pair</span>
+                <span class="c1"># (which we already popped wholesale above).</span>
+                <span class="k">for</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">old_pretoken</span><span class="p">,</span> <span class="n">old_pretoken</span><span class="p">[</span><span class="mi">1</span><span class="p">:]):</span>
+                    <span class="k">if</span> <span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">==</span> <span class="n">best_pair</span><span class="p">:</span>
+                        <span class="k">continue</span>
+                    <span class="n">pair_counts</span><span class="p">[(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)]</span> <span class="o">-=</span> <span class="n">n</span>
+                    <span class="k">if</span> <span class="n">pair_counts</span><span class="p">[(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+                        <span class="n">pair_counts</span><span class="o">.</span><span class="n">pop</span><span class="p">((</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">))</span>
+                    <span class="n">containing_pretokens</span> <span class="o">=</span> <span class="n">pair_to_pretokens</span><span class="o">.</span><span class="n">get</span><span class="p">((</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">))</span>
+                    <span class="k">if</span> <span class="n">containing_pretokens</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                        <span class="n">containing_pretokens</span><span class="o">.</span><span class="n">discard</span><span class="p">(</span><span class="n">old_pretoken</span><span class="p">)</span>
+                        <span class="k">if</span> <span class="ow">not</span> <span class="n">containing_pretokens</span><span class="p">:</span>
+                            <span class="n">pair_to_pretokens</span><span class="o">.</span><span class="n">pop</span><span class="p">((</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">))</span>
+
+                <span class="c1"># Rewrite the pre-token with the merge applied, then register the</span>
+                <span class="c1"># new shape&#39;s pair contributions.</span>
+                <span class="n">new_pretoken</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_apply_merge</span><span class="p">(</span><span class="n">old_pretoken</span><span class="p">,</span> <span class="n">best_pair</span><span class="p">,</span> <span class="n">merged_token</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">new_pretoken</span><span class="p">,</span> <span class="n">new_pretoken</span><span class="p">[</span><span class="mi">1</span><span class="p">:]):</span>
+                    <span class="n">pair_counts</span><span class="p">[(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)]</span> <span class="o">=</span> <span class="n">pair_counts</span><span class="o">.</span><span class="n">get</span><span class="p">((</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="n">n</span>
+                    <span class="n">pair_to_pretokens</span><span class="o">.</span><span class="n">setdefault</span><span class="p">((</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="nb">set</span><span class="p">())</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">new_pretoken</span><span class="p">)</span>
+
+                <span class="c1"># Two distinct old pre-tokens may collapse to the same new shape — sum counts.</span>
+                <span class="n">pretoken_counts</span><span class="p">[</span><span class="n">new_pretoken</span><span class="p">]</span> <span class="o">=</span> <span class="n">pretoken_counts</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">new_pretoken</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="n">n</span>
+
+        <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span><span class="n">vocab</span><span class="o">=</span><span class="n">vocab</span><span class="p">,</span> <span class="n">merges</span><span class="o">=</span><span class="n">merges</span><span class="p">,</span> <span class="n">special_tokens</span><span class="o">=</span><span class="n">special_tokens</span><span class="p">)</span>
+</code></pre></div>
+
+<hr />
+<h2 id="problem-train_bpe_tinystories-bpe-training-on-tinystories">Problem <code>train_bpe_tinystories</code> — BPE Training on TinyStories</h2>
+<p><span class="heading-meta">2 points</span></p>
+<h3 id="a-train-on-tinystories-vocab-10000">(a) Train on TinyStories, vocab 10000</h3>
+<p><strong>Question:</strong> Train on TinyStories with <code>vocab_size=10000</code>, report time + memory, identify the longest token, and judge whether it makes sense.</p>
+<p><strong>Answer:</strong></p>
+<table>
+<thead>
+<tr>
+<th>metric</th>
+<th>value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>wall time</td>
+<td><strong>~700 s (11 min 41 s)</strong> on 4 workers</td>
+</tr>
+<tr>
+<td>peak process RSS</td>
+<td><strong>~125 MiB</strong></td>
+</tr>
+<tr>
+<td>final vocab size</td>
+<td>10 000 (= 256 bytes + 1 special + 9 743 merges)</td>
+</tr>
+<tr>
+<td>longest token</td>
+<td><code>b' accomplishment'</code> (15 bytes)</td>
+</tr>
+</tbody>
+</table>
+<p>The longest token is <code>' accomplishment'</code> (with a leading space). It makes sense: TinyStories is moralistic children&rsquo;s stories where words like <em>accomplishment</em>, <em>adventure</em>, <em>somewhere</em>, <em>important</em> recur often. The leading space comes from the GPT-2 regex&rsquo;s <code>?\p{L}+</code> branch, which absorbs the preceding space into each word&rsquo;s pre-token — so most &ldquo;long&rdquo; word tokens carry that space prefix.</p>
+<h3 id="b-profile-what-dominates-training-time">(b) Profile: what dominates training time?</h3>
+<p><strong>Question:</strong> Profile your code. What part of the tokenizer training process takes the most time?</p>
+<p><strong>Answer:</strong> With the naive merge loop (recount-all-pairs every iteration), the merge loop was 95%+ of wall time and grew as O(N·V) where N = total atom slots and V = vocab_size. After switching to <strong>incremental pair-count updates</strong> with the <code>pair_to_pretokens</code> reverse index, the merge loop scales with <em>affected pre-tokens only</em> (typically &lt;5% of the corpus per iteration). On the optimized run, pre-tokenization (parallel across 4 workers, ~5 s on the valid set) and the merge loop are roughly comparable; pre-tokenization edges out on small inputs while the merge loop has the larger absolute cost on the full train.<sup class="margin-marker"><a href="#note-5">5</a></sup><span class="margin-note" id="note-5"><span class="margin-note__label">Note 5</span>Structurally, pre-tokenization is embarrassingly parallel (just add workers) while the merge loop is inherently sequential — each merge depends on the previous. So the merge loop is the scaling ceiling for very large vocabs even after the incremental optimization, since multiprocessing can&rsquo;t speed it up.</span></p>
+<hr />
+<h2 id="problem-train_bpe_expts_owt-deferred">Problem <code>train_bpe_expts_owt</code> — Deferred</h2>
+<p><span class="heading-meta">2 points · not yet attempted</span></p>
+<p>Training a vocab-32 000 BPE on OpenWebText (~11 GB corpus) is estimated at ~60–70 min wall-clock with the current implementation — well within the 12-hour budget, but not a priority right now. The speedup work (incremental pair counts, multiprocessing pre-tokenization) is already validated by the TinyStories run, so the marginal <em>learning</em> return on this sub-problem is low. The qualitative output difference — what the longest token looks like on internet-scale text vs. children&rsquo;s stories — is the main thing left to observe.</p>
+<p><strong>Plan to revisit</strong> after finishing the TinyStories end-to-end pipeline (transformer training, sampling, perplexity). At that point an OWT-trained tokenizer also becomes the input for any leaderboard submission, which would supply a separate motivation.</p>
+<hr />
+<h2 id="problem-tokenizer-implementing-the-tokenizer">Problem <code>tokenizer</code> — Implementing the Tokenizer</h2>
+<p><span class="heading-meta">15 points</span></p>
+<p><strong>Question:</strong> Implement a <code>BPETokenizer</code> class with <code>__init__(vocab, merges, special_tokens)</code>, <code>encode(text) -&gt; list[int]</code>, <code>encode_iterable(stream) -&gt; Iterator[int]</code>, and <code>decode(ids) -&gt; str</code>. Special tokens must be preserved as single units; encoding must produce the canonical priority-based sequence (the one training would have produced).</p>
+<p><strong>Verifying test:</strong> <code>uv run pytest tests/test_tokenizer.py</code> &mdash; <strong>passes (24/24 + 1 xpassed)</strong>.</p>
+<h3 id="splitting-on-special-tokens-two-regex-recipes-for-two-jobs">Splitting on special tokens — two regex recipes for two jobs</h3>
+<p><code>re.split</code> has two behaviors depending on whether the pattern contains capturing groups:</p>
+<ul>
+<li><strong>No capturing group</strong> — delimiters are <em>discarded</em>. This is what training-time pretokenization wants (special tokens act as hard segmentation boundaries but don&rsquo;t contribute to pair counts).</li>
+<li><strong>With outer parens</strong> — delimiters are <em>preserved</em> as their own elements in the result, interleaved between text segments. This is what <code>encode</code> needs, because each special token in the input must emit its own pre-assigned vocab ID.</li>
+</ul>
+<p><code>BPETokenizer.__init__</code> builds the encoding-side pattern by wrapping the alternation in <code>(...)</code>, and <code>encode</code> then checks <code>if segment in self.special_tokens</code> to emit the special-token ID directly, bypassing merges.</p>
+<p>Special tokens are also <strong>sorted by length descending</strong> before joining. Regex alternation is <em>leftmost-wins</em> (not longest-wins), so without sorting a shorter prefix could match before its longer overlapping cousin — e.g. <code>&lt;|endoftext|&gt;</code> would eat into <code>&lt;|endoftext|&gt;&lt;|endoftext|&gt;</code> and produce two separate single-token matches instead of one double-token match. Sorting descending guarantees the longer alternative is tried first.</p>
+<h3 id="priority-based-merge-selection">Priority-based merge selection</h3>
+<p>The core of <code>encode</code> is a single nested loop. At each step it scans the current sequence&rsquo;s adjacent pairs and applies <strong>the one with the smallest <code>merge_priorities</code> value</strong> (= earliest learned during training), not the first one encountered left-to-right. The left-to-right greedy variant is wrong in general — for input <code>[a, b, c]</code> with merges <code>[(b, c), (a, b)]</code>, greedy yields <code>[ab, c]</code> but the priority-based encoder yields <code>[a, bc]</code>, which is the sequence training would have produced.<sup class="margin-marker"><a href="#note-6">6</a></sup><span class="margin-note" id="note-6"><span class="margin-note__label">Note 6</span>Priority is by training-iteration order — index 0 in <code>merges</code> means &ldquo;learned first,&rdquo; and that merge must fire first at encode time. Subsequent merges may <em>depend on</em> earlier ones (e.g. merge <code>(ab, c)</code> can only fire after <code>(a, b) → ab</code> has created the atom <code>ab</code>). Replaying training order at encode time is the contract between training-time data prep and inference-time input prep — the model only knows the token sequences its tokenizer emits.</span></p>
+<p>The loop terminates at a <strong>fixed point</strong>: when no adjacent pair in the current sequence has a learned merge, we stop. The number of iterations is input-dependent (typically 0–10 for short pretokens), which is why it&rsquo;s a <code>while True</code> rather than a fixed-count loop.</p>
+<p><em>From <code>cs336/assignments/assignment1/assignment1-basics/cs336_basics/bpe.py::BPETokenizer.encode</code>:</em></p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">encode</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">text</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+        <span class="n">token_ids</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="c1"># Split on special tokens but preserve them as separate segments.</span>
+        <span class="n">segments</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">special_token_pattern</span><span class="p">,</span> <span class="n">text</span><span class="p">)</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">special_token_pattern</span> <span class="k">else</span> <span class="p">[</span><span class="n">text</span><span class="p">]</span>
+
+        <span class="k">for</span> <span class="n">segment</span> <span class="ow">in</span> <span class="n">segments</span><span class="p">:</span>
+            <span class="c1"># Special tokens map straight to their pre-assigned id.</span>
+            <span class="k">if</span> <span class="n">segment</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">special_tokens</span><span class="p">:</span>
+                <span class="n">token_ids</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">token_to_id</span><span class="p">[</span><span class="n">segment</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)])</span>
+                <span class="k">continue</span>
+
+            <span class="c1"># Pre-tokenize the segment, then apply merges to each pre-token.</span>
+            <span class="k">for</span> <span class="n">match</span> <span class="ow">in</span> <span class="n">re</span><span class="o">.</span><span class="n">finditer</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">PAT</span><span class="p">,</span> <span class="n">segment</span><span class="p">):</span>
+                <span class="n">token_bytes</span> <span class="o">=</span> <span class="p">[</span><span class="nb">bytes</span><span class="p">([</span><span class="n">b</span><span class="p">])</span> <span class="k">for</span> <span class="n">b</span> <span class="ow">in</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)]</span>
+
+                <span class="c1"># Priority-based merge: at each step, pick the applicable adjacent pair</span>
+                <span class="c1"># with the smallest merge_priorities value (earliest learned) and apply</span>
+                <span class="c1"># just that one. Loop until no applicable pair remains.</span>
+                <span class="k">while</span> <span class="nb">len</span><span class="p">(</span><span class="n">token_bytes</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+                    <span class="n">priority_pair</span> <span class="o">=</span> <span class="kc">None</span>
+                    <span class="n">priority_pair_index</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+                    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">token_bytes</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
+                        <span class="n">pair</span> <span class="o">=</span> <span class="p">(</span><span class="n">token_bytes</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">token_bytes</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">])</span>
+                        <span class="k">if</span> <span class="n">pair</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">merge_priorities</span><span class="p">:</span>
+                            <span class="k">if</span> <span class="p">(</span>
+                                <span class="n">priority_pair</span> <span class="ow">is</span> <span class="kc">None</span>
+                                <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">merge_priorities</span><span class="p">[</span><span class="n">pair</span><span class="p">]</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">merge_priorities</span><span class="p">[</span><span class="n">priority_pair</span><span class="p">]</span>
+                            <span class="p">):</span>
+                                <span class="n">priority_pair</span> <span class="o">=</span> <span class="n">pair</span>
+                                <span class="n">priority_pair_index</span> <span class="o">=</span> <span class="n">i</span>
+                    <span class="k">if</span> <span class="n">priority_pair_index</span> <span class="o">==</span> <span class="o">-</span><span class="mi">1</span><span class="p">:</span>
+                        <span class="k">break</span>
+                    <span class="n">token_bytes</span> <span class="o">=</span> <span class="p">(</span>
+                        <span class="n">token_bytes</span><span class="p">[:</span><span class="n">priority_pair_index</span><span class="p">]</span>
+                        <span class="o">+</span> <span class="p">[</span><span class="n">priority_pair</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">+</span> <span class="n">priority_pair</span><span class="p">[</span><span class="mi">1</span><span class="p">]]</span>
+                        <span class="o">+</span> <span class="n">token_bytes</span><span class="p">[</span><span class="n">priority_pair_index</span> <span class="o">+</span> <span class="mi">2</span> <span class="p">:]</span>
+                    <span class="p">)</span>
+
+                <span class="n">token_ids</span> <span class="o">+=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">token_to_id</span><span class="p">[</span><span class="n">b</span><span class="p">]</span> <span class="k">for</span> <span class="n">b</span> <span class="ow">in</span> <span class="n">token_bytes</span><span class="p">]</span>
+
+        <span class="k">return</span> <span class="n">token_ids</span>
+</code></pre></div>
+
+<h3 id="streaming-via-encode_iterable">Streaming via <code>encode_iterable</code></h3>
+<p><code>encode_iterable</code> is a one-liner: <code>for chunk in iterable: yield from self.encode(chunk)</code>. Memory-efficient for large files because only one chunk is held at a time. The corresponding memory test (<code>test_encode_iterable_memory_usage</code>, ≤1 MB budget) passes; the analogous test for non-streaming <code>encode</code> is marked <code>xfail</code> in the suite because plain <code>encode</code> materializes the whole text in memory.</p>
+<h3 id="decoding">Decoding</h3>
+<p><code>decode</code> is also a one-liner: concatenate the vocab bytes for each id and <code>.decode("utf-8", errors="replace")</code>. The <code>errors="replace"</code> is necessary because a user can construct arbitrary ID sequences whose bytes don&rsquo;t form valid UTF-8 — those positions become <code>U+FFFD</code> instead of raising.</p>
+<hr />
+<h2 id="problem-tokenizer_experiments-deferred">Problem <code>tokenizer_experiments</code> — Deferred</h2>
+<p><span class="heading-meta">4 points · not yet attempted</span></p>
+<p>The four sub-parts ask for compression ratios on TinyStories and OWT samples, a cross-tokenizer &ldquo;what happens if you tokenize OWT with the TinyStories tokenizer?&rdquo; experiment, a throughput estimate (bytes/sec → Pile extrapolation), and encoding the TinyStories+OWT train/dev datasets to integer-ID files. Three of the four depend on having both tokenizers trained; with OWT <a href="#problem-train_bpe_expts_owt-deferred">deferred</a>, this whole problem rides along.</p>
+<p><strong>Plan to revisit</strong> alongside the OWT BPE training. The throughput estimate (c) and the cross-tokenizer (b) sub-parts are quick once OWT exists.</p>
         </div>
       </article>
     </div>

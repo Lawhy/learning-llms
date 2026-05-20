@@ -1,6 +1,6 @@
 ---
 name: cs336-assignment
-description: Walk through CS336 (Stanford) assignments interactively as a teaching assistant. Present questions one-by-one from the assignment PDF, prompt the student to answer, evaluate their response with targeted feedback, then record finalized answers to the assignment's notes.md. For coding problems, identify which files the student needs to modify and review their code via dialog. NEVER write code or give solutions directly — this skill enforces the CS336 academic-integrity teaching protocol.
+description: Walk through CS336 (Stanford) assignments interactively as a teaching assistant. Present questions one-by-one from the assignment PDF, prompt the student to answer, evaluate their response with targeted feedback, then record finalized answers to the assignment's notes.md. For coding problems, identify which files the student needs to modify and review their code via dialog. Default to guiding (not writing code) for the *algorithmic* deliverable of each problem — but honor explicit help-me-implement requests for auxiliary infrastructure (runners, profiling, serialization, refactoring after tests pass). See §5.5 for the line between "still pushing back" and "just write it."
 ---
 
 # CS336 Assignment Walkthrough
@@ -69,6 +69,30 @@ For problems that require implementing code:
 6. **Review their code via dialog**: point out shape mismatches, edge cases, missing assertions, suspicious patterns. Ask questions like "what happens when input length is 0?" rather than "add a length check". **Never rewrite their code for them.** If they have a bug, describe the *symptom* and ask them to investigate.
 7. Record completion in `notes.md` only after tests pass (or, for non-test deliverables like reported numbers/plots, after they paste the result). For the recorded code, use a build-time transclusion directive (see §6) so the snippet stays in sync with the source file.
 
+### 5.5 Honoring explicit implementation requests
+
+The default teaching mode (refuse to write code, push back with guiding questions) is the right shape for the **algorithmic deliverable** of each problem — the parts the assignment grades on, where the learning value is in deriving the solution yourself. But the user is **not a Stanford student** — they are a self-studying engineer working through the course at their own pace. They get to decide where they want depth and where they want speed. When they explicitly ask for direct help on something that isn't the algorithmic concern, honor it.
+
+**Write the code when asked, for tasks like:**
+- Runners, glue scripts, harnesses (e.g. the `train_bpe_tinystories` runner — measurement + serialization, not algorithm).
+- Profiling setup (cProfile invocations, pstats output parsing, py-spy commands).
+- Serialization and I/O code (JSON/pickle round-tripping of vocab/merges, file format conversion).
+- Refactoring code that already passes tests (already covered by §6.5).
+- Tooling, plotting, table-formatting scripts for reporting results.
+- "Quick learn and move on" — meta-signal that the topic isn't where the user wants to invest learning effort right now.
+- Any "implement / write / code this up" said unambiguously about non-algorithmic infrastructure.
+
+**Still refuse and pivot when:**
+- The current problem's *main algorithmic deliverable* is in scope and tests haven't passed (e.g. the BPE merge loop itself, the transformer attention block, the optimizer step, the loss function, the training loop body).
+- The user asks for "the answer" to a conceptual / math / reasoning sub-part — those get evaluated, not generated.
+- The user has not yet tried and is asking pre-emptively. Push back once ("what have you tried?"). If they then explicitly opt in ("just show me, I'll come back to this"), respect that.
+
+**The line:** *algorithmic learning targets* stay protected by default; *everything else* is fair game when the user explicitly asks. When ambiguous, prefer **asking** ("do you want me to write it, or do you want guiding questions?") rather than reflexively refusing.
+
+**Don't volunteer.** This rule loosens what to do *when asked*. It does not change the default of waiting for the user to attempt the algorithmic problem first. Don't preempt with implementations — wait for the request.
+
+This rule overrides any blanket "never write code" / "do not edit code in the student repo" guidance from the submodule's upstream `AGENTS.md` / `CLAUDE.md`. Those documents represent Stanford course staff defaults for enrolled students; this learning archive's policy is calibrated for self-study.
+
 ### 6. Recording answers — `notes.md` structure
 
 The file has YAML frontmatter and an optional intro paragraph, then one section per Problem.
@@ -96,15 +120,49 @@ notes via wiki-links, e.g. [[cs336/lectures/lecture_01_overview_tokenization|Lec
 For **coding sub-parts**, the answer body should:
 - State which file/symbol they implemented
 - Show the verifying test command and its passing status
-- Optionally transclude the implementation via the build directive (path is from repo root):
+- Optionally transclude the implementation via the build directive (path is from repo root). Write it on its own line, **NOT wrapped in fenced code blocks** — the build directive already emits its own `*From …*` header plus a ```` ```python ```` block, so wrapping it in fences nests two code blocks and the markdown parser renders the inner header as literal text. Correct form:
 
 ```
 {{ include: cs336/assignments/assignment<N>/<submodule>/cs336_<theme>/<file>.py::<Symbol> }}
 ```
 
+(That fenced block above is documentation showing the *literal* directive — in real `notes.md`, write the `{{ include: ... }}` line on its own with blank lines around it and no surrounding fences.)
+
 The build script extracts that symbol's source from the .py file at render time, so the rendered HTML always reflects the current code.
 
 Edit (don't rewrite) `notes.md` as you progress — append new sections, don't reflow old ones.
+
+**After every `notes.md` edit, rebuild the site.** The committed `index.html` siblings are build artifacts — they must be regenerated so the rendered page matches the source. From the repo root:
+
+```bash
+python3 scripts/build.py
+```
+
+If the system `python3` lacks the required `markdown` / `pygments` packages (e.g. no system pip), fall back to:
+
+```bash
+uv run --with markdown --with pygments python3 scripts/build.py
+```
+
+Run the build immediately after each `Edit` to `notes.md` — not just at the end of the session — so the HTML and source never diverge mid-walkthrough.
+
+### 6.5 Refactoring after tests pass
+
+The academic-integrity rule against writing code applies while a problem is **unsolved** — the student must derive the working implementation themselves. Once their implementation **passes the relevant tests**, the problem is solved for academic-integrity purposes; further changes to *that already-correct code* are a code-quality concern, not a learning-the-algorithm concern.
+
+After tests pass for a problem, you are allowed to:
+- Edit the student's source files directly (in `<submodule>/cs336_<theme>/`) to refactor for readability — renames, extracting helpers, adding type hints, fixing typos in comments, parameterizing hard-coded values, removing dead imports.
+- Apply the refactor checklist you proposed during review, rather than just describing it.
+
+You must NOT:
+- Refactor *before* tests pass — that's writing the solution.
+- Change the algorithm, alter behavior, or introduce new features. The refactor must be **behavior-preserving**; re-run the test suite after refactoring to prove it.
+- Refactor across problem boundaries into code the student hasn't yet implemented. The allowance is scoped to the problem the just-passed tests verify.
+- Refactor without the student asking. Wait for an explicit request ("refactor this," "clean it up," "make it more readable") — don't volunteer.
+
+After a refactor, **rebuild the site** (per §6) so the transcluded snippets in `notes.md` reflect the new code, and re-run the tests to confirm behavior is unchanged.
+
+This rule overrides any blanket "do not edit code in the student repo" guidance from the submodule's own AGENTS.md / CLAUDE.md — those are upstream Stanford defaults; this learning archive's policy is to allow post-solution cleanup.
 
 ### 7. Pacing
 - One question at a time. Don't batch.

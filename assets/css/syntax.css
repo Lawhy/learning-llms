@@ -1,0 +1,97 @@
+/* Pygments / codehilite — tuned to cream + coral palette */
+
+.post-body .highlight {
+  background: rgba(20, 20, 19, 0.04);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  margin: 1.25rem 0;
+}
+
+.post-body .highlight pre {
+  margin: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+}
+
+.post-body .highlight code {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+  color: var(--ink);
+}
+
+/* Pygments token classes ----------------------------------------------- */
+
+/* Comments — muted */
+.highlight .c,
+.highlight .ch,
+.highlight .cm,
+.highlight .cp,
+.highlight .c1,
+.highlight .cs   { color: #87867F; font-style: italic; }
+
+/* Errors — coral underline */
+.highlight .err  { color: #D97757; }
+
+/* Keywords — deep warm gray, semi-bold */
+.highlight .k,
+.highlight .kc,
+.highlight .kd,
+.highlight .kn,
+.highlight .kp,
+.highlight .kr,
+.highlight .kt   { color: #6B4F3F; font-weight: 600; }
+
+/* Names: functions, classes, builtins */
+.highlight .nf,
+.highlight .fm   { color: #1F4D63; }            /* function name — slate blue */
+.highlight .nc,
+.highlight .nn   { color: #5B4674; }            /* class / namespace — purple-gray */
+.highlight .nb   { color: #6B4F3F; }            /* builtin — same as keyword */
+.highlight .nd   { color: #87867F; }            /* decorator — muted */
+.highlight .nx,
+.highlight .vi,
+.highlight .vc   { color: var(--ink); }
+
+/* Operators / punctuation */
+.highlight .o,
+.highlight .p    { color: #6B6B66; }
+
+/* Strings — coral family */
+.highlight .s,
+.highlight .s1,
+.highlight .s2,
+.highlight .sa,
+.highlight .sb,
+.highlight .sc,
+.highlight .dl,
+.highlight .sd,
+.highlight .se,
+.highlight .sh,
+.highlight .si,
+.highlight .sx,
+.highlight .sr,
+.highlight .ss   { color: #B85A3F; }
+
+/* Numbers */
+.highlight .m,
+.highlight .mb,
+.highlight .mf,
+.highlight .mh,
+.highlight .mi,
+.highlight .il,
+.highlight .mo   { color: #7A5C2E; }
+
+/* Generic / diff */
+.highlight .ge   { font-style: italic; }
+.highlight .gs   { font-weight: 600; }
+.highlight .gh,
+.highlight .gu   { color: #6B4F3F; font-weight: 600; }
+.highlight .gd   { color: #B85A3F; background: rgba(184, 90, 63, 0.08); }
+.highlight .gi   { color: #2F6B3F; background: rgba(47, 107, 63, 0.08); }

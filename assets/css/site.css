@@ -1,0 +1,1873 @@
+:root {
+  /* news/blog cream */
+  --bg: #faf9f5;
+  --ink: #141413;
+  --muted: #6b6b66;
+  --muted-2: #87867f;
+  --accent: #d97757;
+  --rule: rgba(20, 20, 19, 0.1);
+  --aside-bg: rgba(20, 20, 19, 0.025);
+
+  /* TML-pattern type stack */
+  --display: "Newsreader", "Source Serif 4", Georgia, serif;
+  --serif:
+    "Source Serif 4", "Iowan Old Style", "Iowan Old Style BT", Georgia,
+    "Times New Roman", serif;
+  --sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+    sans-serif;
+  /* 楷体 stack for literature: LXGW WenKai (jsDelivr) then system 楷体 fallbacks. */
+  --xingkai:
+    "LXGW WenKai", "LXGW WenKai Screen", "STKaiti", "KaiTi", "楷体",
+    "Source Serif 4", serif;
+
+  /* Layout */
+  --content-width: 660px;
+  --aside-width: 200px;
+  --aside-gap: 2.5rem;
+  --toc-width: 220px;
+  --toc-gap: 2rem;
+  --shell-max: 1200px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.65;
+  font-variation-settings: "opsz" 14;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+.page {
+  width: 100%;
+  padding-bottom: 6rem;
+}
+
+/* ===================================================================
+   HERO
+   =================================================================== */
+
+.page__hero {
+  max-width: var(--content-width);
+  margin: 0 auto;
+  padding: 5.5rem 1.6rem 3rem;
+}
+
+.hero__name {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 2rem;
+  line-height: 1.25;
+  letter-spacing: -0.012em;
+  margin: 0 0 0.45rem;
+  font-variation-settings: "opsz" 32;
+  display: flex;
+  align-items: center;
+  gap: 0.55em;
+}
+
+.hero__seal {
+  height: 1.3em;
+  width: auto;
+  display: inline-block;
+  mix-blend-mode: multiply;
+  transform: translateY(-0.02em);
+}
+
+.hero__sub {
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--muted);
+  margin: 0;
+}
+
+/* ===================================================================
+   SHELL: 3-column grid (toc | content | aside-gutter)
+   =================================================================== */
+
+.page__shell {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr)
+    minmax(0, var(--content-width))
+    minmax(0, 1fr);
+  column-gap: var(--toc-gap);
+  align-items: start;
+  max-width: var(--shell-max);
+  margin: 0 auto;
+  padding: 0 1.6rem;
+}
+
+/* ===================================================================
+   LEFT TOC
+   =================================================================== */
+
+.left-toc {
+  grid-column: 1;
+  justify-self: end;
+  position: sticky;
+  top: 3.5rem;
+  max-width: var(--toc-width);
+  padding-left: 1.2rem; /* room for active dot */
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.left-toc ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.left-toc li {
+  margin: 0 0 0.55rem;
+  position: relative;
+}
+
+.left-toc a {
+  color: var(--muted-2);
+  text-decoration: none;
+  transition: color 0.2s ease;
+  position: relative;
+  display: inline-block;
+}
+
+.left-toc a:hover {
+  color: var(--ink);
+}
+
+.left-toc a.is-active {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* Single animated dot that translates between active TOC entries */
+.toc-marker {
+  position: absolute;
+  left: 0.05rem;
+  top: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(0);
+  transition:
+    transform 0.55s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.25s ease;
+  will-change: transform;
+}
+
+.toc-marker.is-visible {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toc-marker {
+    transition: opacity 0.15s ease;
+  }
+}
+
+/* ===================================================================
+   CONTENT
+   =================================================================== */
+
+.content {
+  grid-column: 2;
+  width: 100%;
+  min-width: 0;
+}
+
+.section {
+  margin-bottom: 4.5rem;
+  scroll-margin-top: 2rem;
+}
+
+.section:last-child {
+  margin-bottom: 0;
+}
+
+.section__title {
+  font-family: var(--sans);
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 1.5rem;
+}
+
+/* About prose paragraphs — only "reading prose" on the page, slightly larger.
+   Scoped to direct children so nested <p>s (e.g. .post-list__excerpt) aren't
+   inadvertently pulled up to 17px. */
+.section > p {
+  margin: 0 0 1.25rem;
+  font-size: 17px;
+  line-height: 1.65;
+}
+.section > p:last-child {
+  margin-bottom: 0;
+}
+
+.section a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  transition:
+    text-decoration-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.section a:hover {
+  text-decoration-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ===================================================================
+   SECTION ASIDE (margin notes — float into right gutter)
+   =================================================================== */
+
+.section__aside {
+  float: right;
+  clear: right;
+  width: var(--aside-width);
+  margin-right: calc(-1 * (var(--aside-width) + var(--aside-gap)));
+  margin-left: var(--aside-gap);
+  margin-top: 0.35rem;
+  margin-bottom: 1.5rem;
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.section__aside h3 {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--muted-2);
+  margin: 0 0 0.7rem;
+}
+
+.section__aside ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.section__aside li {
+  margin-bottom: 0.4rem;
+}
+
+.section__aside a {
+  color: var(--ink);
+  text-decoration: none;
+  transition: color 0.2s ease;
+  border-bottom: 1px solid transparent;
+  padding-bottom: 1px;
+}
+
+.section__aside a:hover {
+  color: var(--accent);
+  border-bottom-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* Portrait at the top of the About aside */
+.aside-portrait {
+  margin: 0 0 1.1rem;
+}
+
+.aside-portrait img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 2px;
+  filter: saturate(0.92) contrast(0.98);
+}
+
+/* Icon list (Find me) */
+.icon-list a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55em;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.icon-list a .label,
+.icon-list a span {
+  border-bottom: 1px solid transparent;
+  padding-bottom: 1px;
+  transition: border-color 0.2s ease;
+}
+
+.icon-list a:hover span {
+  border-bottom-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: color 0.2s ease;
+}
+
+.icon-list a:hover .icon {
+  color: var(--accent);
+}
+
+/* ===================================================================
+   INLINE TABS IN SECTION TITLE
+   (e.g.,  BLOG — TECHNICAL / 文学)
+   =================================================================== */
+
+.section__title--with-tabs {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.section__title-sep {
+  color: var(--muted-2);
+  opacity: 0.6;
+  font-weight: 400;
+}
+
+.section__tabs {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.section__tab {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: var(--muted-2);
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.section__tab:hover {
+  color: var(--ink);
+}
+
+.section__tab.is-active {
+  color: var(--accent);
+}
+
+.section__tab-sep {
+  color: var(--muted-2);
+  opacity: 0.45;
+}
+
+.section__tab:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+/* ===================================================================
+   SCROLLABLE POST LIST CONTAINER
+   =================================================================== */
+
+.post-list-scroll {
+  max-height: 22rem;
+  overflow-y: auto;
+  padding-right: 0.75rem;
+  margin-right: -0.75rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) transparent;
+}
+
+.post-list-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.post-list-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.post-list-scroll::-webkit-scrollbar-thumb {
+  background: var(--rule);
+  border-radius: 3px;
+}
+.post-list-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-2);
+}
+
+/* Fade hint at the bottom suggesting more content */
+.post-list-scroll {
+  mask-image: linear-gradient(
+    to bottom,
+    black 0,
+    black calc(100% - 2.5rem),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    black 0,
+    black calc(100% - 2.5rem),
+    transparent 100%
+  );
+}
+
+/* ===================================================================
+   BLOG POST LIST
+   =================================================================== */
+
+.post-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.post-list li {
+  margin: 0 0 1.75rem;
+  padding: 0;
+}
+
+.post-list li:last-child {
+  margin-bottom: 0;
+}
+
+.post-list a {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  text-decoration: none;
+  color: var(--ink);
+  margin-bottom: 0.3rem;
+}
+
+.post-list__title {
+  font-family: var(--serif);
+  font-variation-settings: "opsz" 16;
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.35;
+  transition: color 0.2s ease;
+}
+
+.post-list a:hover .post-list__title {
+  color: var(--accent);
+}
+
+.post-list__date {
+  font-family: var(--sans);
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+
+.post-list__excerpt {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.55;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Literature panel: 楷体 (LXGW WenKai). Sized slightly larger than the tech
+   panel because Chinese characters need more pixel area for the same legibility. */
+#panel-lit .post-list__title {
+  font-family: var(--xingkai);
+  font-weight: 400;
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+}
+
+#panel-lit .post-list__excerpt {
+  font-family: var(--xingkai);
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+/* ===================================================================
+   EXPERIENCE
+   =================================================================== */
+
+.experience {
+  margin: 0;
+}
+
+.experience__item {
+  display: flex;
+  justify-content: space-between;
+  gap: 1.5rem;
+  align-items: baseline;
+  margin: 0 0 0.9rem;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.experience__item:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+
+.experience__item dt {
+  flex: 1;
+  font-family: var(--serif);
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.experience__role {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.experience__org {
+  color: var(--muted);
+}
+
+.experience__item dd {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.experience__cert,
+.tag-link {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  color: var(--muted-2);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  padding-bottom: 1px;
+  margin-left: 0.25em;
+  transition:
+    color 0.2s ease,
+    border-color 0.2s ease;
+  white-space: nowrap;
+}
+
+.experience__cert:hover,
+.tag-link:hover {
+  color: var(--accent);
+  border-bottom-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* ===================================================================
+   OPEN-SOURCE LIST
+   =================================================================== */
+
+.oss-group {
+  margin: 0 0 2.25rem;
+}
+
+.oss-group:last-child {
+  margin-bottom: 0;
+}
+
+.oss-group__title {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  margin: 0 0 1rem;
+}
+
+.oss-list {
+  margin: 0;
+}
+
+.oss-item {
+  display: flex;
+  gap: 1.5rem;
+  align-items: baseline;
+  margin: 0 0 0.8rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.oss-item:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+
+.oss-item dt {
+  flex: 0 0 10rem;
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
+.oss-role {
+  font-family: var(--sans);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.oss-role--contrib {
+  color: var(--muted-2);
+}
+
+.oss-item dt a {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  padding-bottom: 1px;
+  transition:
+    color 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.oss-item dt a:hover {
+  color: var(--accent);
+  border-bottom-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.oss-item dd {
+  margin: 0;
+  flex: 1;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+/* Stacked layout on narrow screens */
+@media (max-width: 640px) {
+  .oss-item {
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .oss-item dt {
+    flex: 0 0 auto;
+  }
+  .oss-item dd {
+    font-size: 14px;
+  }
+}
+
+/* ===================================================================
+   POST PAGES
+   =================================================================== */
+
+.page__hero--post {
+  padding-top: 4rem;
+  padding-bottom: 2.5rem;
+}
+
+.post-back {
+  display: inline-block;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--muted);
+  text-decoration: none;
+  margin-bottom: 1.75rem;
+  transition: color 0.2s ease;
+}
+
+.post-back:hover {
+  color: var(--accent);
+}
+
+.post-title {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 2rem;
+  line-height: 1.2;
+  letter-spacing: -0.012em;
+  margin: 0 0 0.5rem;
+  font-variation-settings: "opsz" 32;
+}
+
+.post-meta {
+  font-family: var(--sans);
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0;
+}
+
+.post-meta__authors {
+  color: var(--ink);
+}
+
+.post-meta__authors a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  padding-bottom: 1px;
+  transition:
+    color 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.post-meta__authors a:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.post-body {
+  font-family: var(--serif);
+  font-size: 1rem;
+  line-height: 1.65;
+  color: var(--ink);
+}
+
+.post-body h2 {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 1.3rem;
+  line-height: 1.3;
+  margin: 2.4rem 0 1rem;
+  scroll-margin-top: 1.5rem;
+}
+
+.post-body h3 {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 1.08rem;
+  line-height: 1.35;
+  margin: 1.65rem 0 0.55rem;
+  scroll-margin-top: 1.5rem;
+}
+
+.post-body p {
+  margin: 0 0 1.1rem;
+}
+
+.post-body a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  text-underline-offset: 3px;
+  transition:
+    text-decoration-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.post-body a:hover {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}
+
+.post-body blockquote {
+  border-left: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  padding: 0.15rem 0 0.15rem 1.1rem;
+  color: var(--muted);
+  margin: 1.2rem 0;
+  font-style: normal;
+}
+
+.post-body hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 2rem 0;
+}
+
+.post-body code {
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  font-size: 0.88em;
+  background: rgba(20, 20, 19, 0.05);
+  padding: 0.12em 0.35em;
+  border-radius: 3px;
+}
+
+.post-body pre {
+  background: rgba(20, 20, 19, 0.04);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  margin: 1.25rem 0;
+}
+
+.post-body pre code {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+}
+
+.post-body figure {
+  margin: 1.75rem auto;
+  text-align: center;
+}
+
+.post-body figcaption {
+  font-family: var(--sans);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: 0.7rem auto 0;
+  max-width: 85%;
+  text-align: center;
+}
+
+.post-body img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Literature post bodies render in 楷体 (LXGW WenKai) — matches the typographic
+   feel used in the homepage 文学 panel. */
+.post-body--literature {
+  font-family: var(--xingkai);
+  line-height: 1.85;
+}
+
+/* Post cover image: opt-in via `cover:` in front matter. Sits flush at the
+   top of the post body (no card chrome) and breaks slightly outside the body
+   column on each side — a Thinking-Machines-style hero treatment that gives
+   the cover more visual presence than an inline figure. */
+.post-body > .post-cover {
+  margin: 0 -3rem 2.25rem;
+}
+
+.post-body > .post-cover > img {
+  background: transparent;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  width: 100%;
+  height: auto;
+  box-shadow:
+    0 2px 8px rgba(20, 20, 19, 0.06),
+    0 1px 2px rgba(20, 20, 19, 0.04);
+  /* Enforce a uniform 16:9 hero box. Off-ratio sources are cropped via
+     object-fit; object-position biases the crop toward the top so footer
+     watermarks ("公众号 · 知陌若" etc.) get trimmed off the bottom. */
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  object-position: center 25%;
+}
+
+@media (max-width: 800px) {
+  .post-body > .post-cover {
+    margin-left: 0;
+    margin-right: 0;
+  }
+}
+
+/* Standalone images in markdown get wrapped in <p>. Treat those as figures:
+   white card surface so screenshot whitespace blends in, rounded edges so the
+   figure sits naturally on the cream page. */
+.post-body p > img:only-child,
+.post-body figure > img {
+  background: #ffffff;
+  padding: 0.9rem;
+  border-radius: 6px;
+  border: 1px solid var(--rule);
+  box-shadow:
+    0 2px 8px rgba(20, 20, 19, 0.05),
+    0 1px 2px rgba(20, 20, 19, 0.04);
+  box-sizing: border-box;
+  margin: 0 auto;
+}
+
+.post-body p:has(> img:only-child) {
+  text-align: center;
+  margin: 1.75rem auto;
+}
+
+/* Editorial table — horizontal rules only, no vertical borders.
+   Slight horizontal inset + extra vertical margin so the table reads
+   as a distinct comparison panel separate from the body prose. */
+.post-body table {
+  width: 100%;
+  max-width: calc(100% - 1.5rem);
+  margin: 2.5rem auto;
+  font-family: var(--sans);
+  font-size: 0.88rem;
+  line-height: 1.5;
+  border-collapse: collapse;
+}
+
+.post-body thead tr {
+  border-bottom: 1.5px solid var(--ink);
+}
+
+.post-body tbody tr {
+  border-bottom: 1px solid var(--rule);
+}
+
+.post-body tbody tr:last-child {
+  border-bottom: 1.5px solid var(--ink);
+}
+
+.post-body th,
+.post-body td {
+  padding: 0.8rem 0.8rem;
+  text-align: left;
+  border: 0;
+  vertical-align: top;
+}
+
+/* Math inside table cells: shrink so equations fit in narrow columns
+   without mid-equation line wraps. */
+.post-body table .katex {
+  font-size: 0.92em;
+}
+
+.post-body table td br + .katex,
+.post-body table td .katex {
+  display: inline-block;
+}
+
+.post-body th {
+  font-weight: 500;
+  font-size: 0.74rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: transparent;
+  padding-bottom: 0.55rem;
+}
+
+.post-body td:first-child {
+  color: var(--ink);
+}
+
+.post-body td em {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Yes/no markers tuned to palette (replaces ✅/❌) */
+.post-body .yes,
+.post-body .no {
+  display: inline-block;
+  font-weight: 600;
+  font-size: 1.05em;
+  line-height: 1;
+  font-family: var(--sans);
+}
+
+.post-body .yes {
+  color: var(--accent);
+}
+
+.post-body .no {
+  color: var(--muted-2);
+}
+
+.post-body details {
+  border-left: 2px solid var(--rule);
+  padding: 0.4rem 1rem;
+  margin: 1.2rem 0;
+  color: var(--muted);
+}
+
+.post-body details summary {
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--muted-2);
+}
+
+.post-body details[open] summary {
+  margin-bottom: 0.6rem;
+}
+
+/* Margin notes (Tufte/TML-style): a side comment in the right gutter,
+   anchored next to the paragraph where it appears. */
+.post-body .margin-note {
+  float: right;
+  clear: right;
+  width: var(--aside-width);
+  margin-right: calc(-1 * (var(--aside-width) + var(--aside-gap)));
+  margin-left: var(--aside-gap);
+  margin-top: 0;
+  margin-bottom: 1rem;
+  font-family: var(--sans);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--muted);
+  text-align: left;
+}
+
+/* Literature posts: margin notes flow in 楷体 to match the body, slightly
+   smaller than the tech-post sans default for a quieter scholarly feel. */
+.post-body--literature .margin-note {
+  font-family: var(--xingkai);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.post-body .margin-note__label {
+  display: block;
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--muted-2);
+  margin-bottom: 0.45rem;
+}
+
+.post-body .margin-note .katex {
+  font-size: 0.92em;
+}
+
+/* Inline marker that points to a margin note. Renders as a small coral
+   superscript, like a Tufte-style sidenote number. */
+.post-body .margin-marker {
+  font-size: 0.7em;
+  line-height: 0;
+  vertical-align: super;
+  margin-left: 0.05em;
+}
+
+.post-body .margin-marker a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: none;
+  padding: 0 0.1em;
+  font-weight: 500;
+}
+
+.post-body .margin-marker a:hover {
+  color: var(--ink);
+}
+
+/* Highlight the margin note when navigated to via the marker */
+.post-body .margin-note:target {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 3px;
+  padding-left: 0.4rem;
+  margin-left: calc(var(--aside-gap) - 0.4rem);
+  transition: background 0.6s ease;
+}
+
+@media (max-width: 1100px) {
+  .post-body .margin-note {
+    display: block;
+    float: none;
+    width: auto;
+    margin: 1rem 0;
+    padding: 0.9rem 1.1rem;
+    background: var(--aside-bg);
+    border-left: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: 2px;
+  }
+}
+
+/* Classical prose block (e.g. 燋食): unpunctuated 古散文 rendered in 楷体 with
+   ideographic spaces between phrases. Slightly larger and looser than regular
+   body text for breathing room and an ink-on-paper feel. */
+.post-body .prose-classical {
+  margin: 2.5rem 0;
+  font-family: var(--xingkai);
+  font-size: 17px;
+  line-height: 2.1;
+  text-align: justify;
+}
+
+.post-body .prose-classical p {
+  margin: 0 0 1.5em;
+  text-indent: 0;
+}
+
+.post-body .prose-classical p:last-child {
+  margin-bottom: 0;
+}
+
+/* The original handwritten scan, kept as a manuscript artifact above the
+   typed prose. Centered, modest in width so it sits as an artifact rather
+   than dominating the page. */
+.post-body .prose-classical__scan {
+  margin: 0 auto 2.5rem;
+  max-width: 480px;
+  text-align: center;
+}
+
+.post-body .prose-classical__scan figcaption {
+  margin-top: 0.6rem;
+  font-family: var(--sans);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+
+/* Classical poem block (e.g. 春折): a centered "stele" of 楷体 with generous
+   breathing room. Margin notes attached to individual lines pin the
+   commentary into the right gutter on desktop. */
+.post-body .poem {
+  margin: 3rem 0 1.5rem;
+  text-align: center;
+  font-family: var(--xingkai);
+  font-size: 1.3rem;
+  line-height: 2.4;
+  letter-spacing: 0.22em;
+  color: var(--ink);
+}
+
+.post-body .poem .poem__line {
+  position: relative;
+  margin: 0;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* Markers on poem lines: zero-width inline-block so they render at their
+   normal superscript position but don't widen the line — keeps the Chinese
+   characters centered identically across all lines (with or without notes). */
+.post-body .poem .margin-marker {
+  display: inline-block;
+  width: 0;
+  overflow: visible;
+}
+
+.post-body .poem-coda {
+  margin: 2rem auto 0;
+  max-width: 28em;
+  text-align: center;
+  font-family: var(--xingkai);
+  font-style: italic;
+  font-size: 0.95rem;
+  color: var(--muted);
+  letter-spacing: 0.05em;
+}
+
+.post-body .poem-attribution {
+  margin: 1.5rem 0 0;
+  text-align: center;
+  font-family: var(--sans);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+
+/* Footnotes (markdown's footnotes extension renders them in .footnote at end of body). */
+.post-body .footnote {
+  margin-top: 2.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.post-body .footnote hr {
+  display: none;
+}
+
+.post-body .footnote ol {
+  padding-left: 1.25rem;
+  margin: 0;
+}
+
+.post-body .footnote li {
+  margin-bottom: 0.5rem;
+  scroll-margin-top: 1.5rem;
+}
+
+.post-body .footnote li:target {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: 3px;
+  padding-left: 0.4rem;
+  margin-left: -0.4rem;
+  transition: background 0.6s ease;
+}
+
+.post-body sup.footnote-ref a,
+.post-body a.footnote-ref {
+  font-size: 0.75em;
+  text-decoration: none;
+  color: var(--accent);
+  border-bottom: none;
+  padding: 0 0.1em;
+}
+
+.post-body a.footnote-backref {
+  text-decoration: none;
+  color: var(--muted-2);
+  border-bottom: none;
+  margin-left: 0.3em;
+}
+
+.post-body a.footnote-backref:hover {
+  color: var(--accent);
+}
+
+/* Reference list at the bottom of posts. Each item is anchor-linkable from
+   inline [N] citations. */
+.post-body .references {
+  list-style: none;
+  padding: 0;
+  margin: 1.25rem 0;
+  font-size: 0.94rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.post-body .references li {
+  margin: 0 0 0.55rem;
+  padding-left: 1.6rem;
+  text-indent: -1.6rem; /* hanging indent: [N] sits at the left edge */
+  scroll-margin-top: 1.5rem; /* anchor-jump offset */
+}
+
+.post-body .references li:target {
+  /* subtle flash when arrived via anchor */
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: 3px;
+  padding-left: 1.6rem;
+  margin-left: -0.35rem;
+  padding-right: 0.35rem;
+  transition: background 0.6s ease;
+}
+
+/* Definition-list for method / variant summaries (e.g. optimizer table replacement).
+   Each method gets its name on one line and a full-width math + comment below. */
+.post-body .method-list {
+  margin: 1.75rem 0;
+}
+
+.post-body .method-list dt {
+  font-family: var(--serif);
+  font-size: 1rem;
+  color: var(--ink);
+  margin: 1.5rem 0 0.35rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.post-body .method-list dt:first-child {
+  margin-top: 0;
+}
+
+.post-body .method-list dt em {
+  color: var(--muted);
+  font-style: italic;
+  font-weight: 400;
+}
+
+.post-body .method-list dd {
+  margin: 0 0 0.5rem;
+}
+
+.post-body .method-list dd p:last-of-type {
+  color: var(--muted);
+  font-size: 0.94rem;
+  font-style: italic;
+  margin-top: 0.5rem;
+  margin-bottom: 0;
+}
+
+.post-body .method-list .katex-display {
+  margin: 0.7rem 0;
+}
+
+/* Long display equations: scroll within the column rather than pushing the
+   page sideways. overflow-y: hidden suppresses the phantom vertical bar
+   KaTeX's descenders can trigger. Scrollbar styled to match the site theme
+   (mirrors .post-list-scroll). */
+.post-body .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25rem 0 0.5rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) transparent;
+}
+
+.post-body .katex-display::-webkit-scrollbar {
+  height: 6px;
+}
+.post-body .katex-display::-webkit-scrollbar-track {
+  background: transparent;
+}
+.post-body .katex-display::-webkit-scrollbar-thumb {
+  background: var(--rule);
+  border-radius: 3px;
+}
+.post-body .katex-display::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-2);
+}
+
+/* Post-level aside: floats into the right gutter (like section__aside but for posts) */
+.post-aside {
+  float: right;
+  clear: right;
+  width: var(--aside-width);
+  margin-right: calc(-1 * (var(--aside-width) + var(--aside-gap)));
+  margin-left: var(--aside-gap);
+  margin-top: 0.4rem;
+  margin-bottom: 1.5rem;
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.post-aside h3 {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--muted-2);
+  margin: 0 0 0.75rem;
+}
+
+.post-aside ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.post-aside li {
+  margin: 0 0 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.post-aside .favicon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 2px;
+}
+
+.post-aside a {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  padding-bottom: 1px;
+  transition:
+    color 0.2s ease,
+    border-color 0.2s ease;
+  min-width: 0;
+}
+
+.post-aside a:hover {
+  color: var(--accent);
+  border-bottom-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+@media (max-width: 1100px) {
+  .post-aside {
+    float: none;
+    width: auto;
+    margin: 0 0 1.75rem;
+    padding: 0.9rem 1.1rem;
+    background: var(--aside-bg);
+    border-left: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: 2px;
+  }
+}
+
+/* Pure typographic lede / abstract — no box, no border, just bigger serif with breathing room. */
+.post-body .post-lede {
+  font-family: var(--serif);
+  font-size: 1.08rem;
+  line-height: 1.65;
+  color: var(--ink);
+  margin: 1.5rem 0 2.25rem;
+  font-variation-settings: "opsz" 17;
+}
+
+.post-body .post-lede strong {
+  font-weight: 600;
+}
+
+@media (max-width: 1100px) {
+  .post-title {
+    font-size: 1.85rem;
+  }
+  .post-body {
+    font-size: 1rem;
+  }
+}
+
+/* ===================================================================
+   PAGE FOOTER
+   =================================================================== */
+
+.page-footer {
+  max-width: var(--content-width);
+  margin: 5rem auto 0;
+  padding: 1.5rem 1.6rem 0;
+  border-top: 1px solid var(--rule);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.page-footer__views {
+  color: var(--muted-2);
+}
+
+/* ===================================================================
+   POST COMMENTS (giscus)
+   =================================================================== */
+
+.post-comments {
+  margin-top: 4.5rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--rule);
+}
+
+.post-comments__title {
+  font-family: var(--sans);
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 1.5rem;
+}
+
+.page-footer__views a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: color 0.2s ease, border-color 0.2s ease;
+}
+
+.page-footer__views a:hover {
+  color: var(--ink);
+  border-bottom-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* ===================================================================
+   RESPONSIVE: collapse below 1100px
+   =================================================================== */
+
+@media (max-width: 1100px) {
+  .page__shell {
+    grid-template-columns: 1fr;
+    max-width: var(--content-width);
+    padding: 0 1.25rem;
+  }
+
+  .left-toc {
+    display: none;
+  }
+
+  .content {
+    grid-column: 1;
+  }
+
+  .section__aside {
+    float: none;
+    width: auto;
+    margin: 0 0 1.5rem;
+    padding: 1rem 1.1rem;
+    background: var(--aside-bg);
+    border-left: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: 2px;
+  }
+
+  /* On mobile, float the portrait left so it sits beside the link list */
+  .aside-portrait {
+    float: left;
+    width: 110px;
+    margin: 0.1rem 1rem 0.5rem 0;
+  }
+
+  /* Clear the float after the icon list ends */
+  .icon-list {
+    overflow: hidden;
+  }
+
+  .page-footer {
+    padding-left: 1.25rem;
+    padding-right: 1.25rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .page__hero {
+    padding: 3.5rem 1.25rem 2rem;
+  }
+  .hero__name {
+    font-size: 1.7rem;
+  }
+  .section {
+    margin-bottom: 3rem;
+  }
+  .post-list a {
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+}
+
+/* ============================================================
+   Homepage frontispiece — editorial opening folio
+   A committed point of view: this is a personal monograph in
+   progress, not a content list. The page reads like the opening
+   page of a book — epigraph, catalogue, ornament, signature.
+   ============================================================ */
+
+.frontispiece-epigraph {
+  font-family: var(--display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 1.65rem;
+  line-height: 1.35;
+  color: var(--ink);
+  letter-spacing: -0.005em;
+  max-width: 26em;
+  margin: 1rem 0 2rem;
+  font-variation-settings: "opsz" 36;
+}
+
+/* Homepage cover uses the blog's `.post-cover` infrastructure
+   (wider-than-body bleed + 16:9 frame + soft shadow). The blog's
+   crop bias is tuned for top-anchored subjects; our transformer
+   illustration is center-balanced, so override object-position. */
+body.home .post-body > .post-cover > img {
+  object-position: center 50%;
+}
+
+/* Frontispiece h1 — lives inside the post-body, below the cover,
+   acting as the title-page caption for the illustration above. */
+.home-title {
+  font-family: var(--display);
+  font-size: 2.25rem;
+  font-weight: 500;
+  text-align: center;
+  letter-spacing: -0.015em;
+  line-height: 1.05;
+  margin: 3rem 0 0.4rem;
+  color: var(--ink);
+  font-variation-settings: "opsz" 36;
+}
+
+.home-subtitle {
+  font-family: var(--display);
+  font-style: italic;
+  font-size: 1rem;
+  text-align: center;
+  color: var(--muted);
+  margin: 0 0 2.25rem;
+  letter-spacing: 0.002em;
+  font-variation-settings: "opsz" 12;
+}
+
+/* Breathing room above the cover (the hidden hero used to give us
+   this), and a tight gap below so the title sits close beneath. */
+body.home .post-body > .post-cover {
+  margin-top: 2.5rem;
+  margin-bottom: 1rem;
+}
+
+
+/* Asterism — the typographic ornament between sections.
+   Used instead of <hr>; conveys editorial care. */
+.ornament {
+  text-align: center;
+  color: var(--accent);
+  font-size: 1.1rem;
+  letter-spacing: 0.5em;
+  margin: 2.5rem 0;
+  user-select: none;
+  font-feature-settings: "case" off;
+}
+
+/* Catalogue — the course list, treated as a private-library
+   listing. Each entry is layered: course code (small caps label),
+   title (large serif), institutional meta (italic), and a
+   live-status line in monospaced small type. */
+.catalogue {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.catalogue__entry {
+  padding: 1.25rem 0;
+}
+
+.catalogue__link {
+  display: block;
+  text-decoration: none;
+  color: var(--ink);
+}
+
+.catalogue__code {
+  font-family: var(--sans);
+  font-size: 0.7rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 500;
+  margin-bottom: 0.3rem;
+}
+
+.catalogue__title {
+  font-family: var(--display);
+  font-size: 1.55rem;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -0.012em;
+  color: var(--ink);
+  font-variation-settings: "opsz" 26;
+  transition: color 0.18s ease;
+}
+
+.catalogue__link:hover .catalogue__title {
+  color: var(--accent);
+}
+
+.catalogue__meta {
+  font-family: var(--display);
+  font-style: italic;
+  font-size: 1rem;
+  color: var(--muted);
+  margin-top: 0.45rem;
+  font-variation-settings: "opsz" 14;
+}
+
+.catalogue__description {
+  font-family: var(--display);
+  font-size: 1.05rem;
+  line-height: 1.55;
+  color: var(--ink);
+  margin: 0.75rem 0 1rem;
+  max-width: 38em;
+  font-variation-settings: "opsz" 16;
+}
+
+.catalogue__meta a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid var(--rule);
+  transition: border-color 0.18s ease, color 0.18s ease;
+}
+
+.catalogue__meta a:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* Progress sections — a <details> disclosure whose <summary> is
+   the always-visible progress row; expanding reveals the item list.
+   The progress class is shared between the summary and any plain
+   <a class="progress"> link variants. */
+.progress-section {
+  margin: 0;
+}
+
+
+.progress-section[open] {
+  padding-bottom: 0.4rem;
+}
+
+.progress-section summary {
+  list-style: none;
+  cursor: pointer;
+  position: relative;
+}
+
+.progress-section summary::-webkit-details-marker,
+.progress-section summary::marker {
+  display: none;
+}
+
+/* Subtle chevron at the right edge of the summary row — signals
+   clickability and rotates 180° when the section is open. */
+.progress-section summary::after {
+  content: "";
+  position: absolute;
+  right: -1.1rem;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: translate(0, -75%) rotate(45deg);
+  transition: transform 0.22s ease, border-color 0.22s ease;
+}
+
+.progress-section[open] summary::after {
+  transform: translate(0, -25%) rotate(-135deg);
+}
+
+.progress-section summary:hover::after {
+  border-right-color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+
+.progress {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr auto;
+  gap: 1rem;
+  align-items: center;
+  text-decoration: none;
+  color: inherit;
+  padding: 0.55rem 0;
+}
+
+.progress__label {
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+  transition: color 0.18s ease;
+}
+
+.progress__bar {
+  display: block;
+  height: 3px;
+  /* Track tinted with the same hue family as the fill, so the bar
+     reads as a measurement range rather than as a small orange tick
+     adrift in gray space. */
+  background: rgba(217, 119, 87, 0.18);
+  position: relative;
+  overflow: hidden;
+  border-radius: 1.5px;
+}
+
+.progress__fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: background 0.18s ease;
+}
+
+.progress__count {
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-feature-settings: "tnum", "lnum";
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition: color 0.18s ease;
+}
+
+.progress:hover .progress__label,
+.progress:hover .progress__count,
+.progress-section summary:hover .progress__label,
+.progress-section summary:hover .progress__count {
+  color: var(--ink);
+}
+
+.progress:hover .progress__fill,
+.progress-section summary:hover .progress__fill {
+  background: var(--ink);
+}
+
+/* Expanded item list under a progress-section. Ready items link
+   to their notes page; stub items are muted text. */
+.progress-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.3rem 0 0.75rem 8.5rem; /* align body with the bar column */
+  counter-reset: progress-item;
+}
+
+.progress-list li {
+  counter-increment: progress-item;
+  font-family: var(--display);
+  font-size: 0.98rem;
+  line-height: 1.45;
+  padding: 0.25rem 0;
+  display: grid;
+  grid-template-columns: 2.25rem 1fr;
+  align-items: baseline;
+  font-variation-settings: "opsz" 16;
+}
+
+.progress-list li::before {
+  content: counter(progress-item, decimal-leading-zero);
+  font-family: var(--sans);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  font-feature-settings: "tnum";
+}
+
+.progress-list .ready a {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: color 0.18s ease, border-color 0.18s ease;
+}
+
+.progress-list .ready a:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.progress-list .stub {
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+/* Hide the entire page header + TOC rail on the homepage — the
+   title moves into the body (below the cover, frontispiece-style),
+   and there's no in-page outline worth a rail. */
+body.home .page__hero,
+body.home .left-toc {
+  display: none;
+}
+

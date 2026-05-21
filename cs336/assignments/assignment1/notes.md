@@ -57,7 +57,7 @@ ready: true
 
 ---
 
-All BPE work lives in a single class, `cs336_basics.bpe.BPETokenizer`. Training is a classmethod (`BPETokenizer.train`) that returns a constructed instance; the same class exposes `encode` / `encode_iterable` / `decode`. Adapters in `tests/adapters.py` are glue — `run_train_bpe` calls `BPETokenizer.train` and unpacks `tok.vocab, tok.merges`; `get_tokenizer` just constructs `BPETokenizer(vocab, merges, special_tokens)`.
+All BPE work<sup class="margin-marker"><a href="#note-7">7</a></sup><span class="margin-note" id="note-7"><span class="margin-note__label">Note 7</span>For the comprehensive distilled writeup &mdash; mental model, worked example, and engineering choices &mdash; see <a href="https://yuanhe.wiki/posts/technical/bpe/">Byte-Pair Encoding (BPE)</a> on the blog. These notes stay focused on the assignment deliverables.</span> lives in a single class, `cs336_basics.bpe.BPETokenizer`. Training is a classmethod (`BPETokenizer.train`) that returns a constructed instance; the same class exposes `encode` / `encode_iterable` / `decode`. Adapters in `tests/adapters.py` are glue — `run_train_bpe` calls `BPETokenizer.train` and unpacks `tok.vocab, tok.merges`; `get_tokenizer` just constructs `BPETokenizer(vocab, merges, special_tokens)`.
 
 ## Problem `train_bpe` — BPE Tokenizer Training
 

@@ -32,6 +32,7 @@
           <li><a href="#problem-tokenizer_experiments-deferred" data-toc>Problem tokenizer_experiments — Deferred</a></li>
           <li><a href="#problem-linear-implementing-the-linear-module" data-toc>Problem linear — Implementing the Linear Module</a></li>
           <li><a href="#problem-embedding-implementing-the-embedding-module" data-toc>Problem embedding — Implementing the Embedding Module</a></li>
+          <li><a href="#problem-rmsnorm-root-mean-square-layer-normalization" data-toc>Problem rmsnorm — Root Mean Square Layer Normalization</a></li>
         </ul>
       </nav>
 
@@ -384,6 +385,69 @@
         <span class="bp">self</span><span class="p">,</span> <span class="n">token_ids</span><span class="p">:</span> <span class="n">Int</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">]</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot;... embedding_dim&quot;</span><span class="p">]:</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="p">[</span><span class="n">token_ids</span><span class="p">]</span>
+</code></pre></div>
+
+<hr />
+<h2 id="problem-rmsnorm-root-mean-square-layer-normalization">Problem <code>rmsnorm</code> — Root Mean Square Layer Normalization</h2>
+<p><span class="heading-meta">1 point</span></p>
+<p><strong>Question:</strong> Implement <code>RMSNorm</code> as a <code>torch.nn.Module</code> with interface <code>(d_model, eps=1e-5, device=None, dtype=None)</code>. <code>forward(x)</code> rescales each activation by $\text{RMSNorm}(a_i) = \frac{a_i}{\text{RMS}(a)} g_i$ where $\text{RMS}(a) = \sqrt{\tfrac{1}{d_\text{model}}\sum_i a_i^2 + \varepsilon}$. Upcast to <code>float32</code> before computing RMS to avoid overflow when squaring, then downcast the result to the input dtype.</p>
+<p><strong>Verifying test:</strong> <code>uv run pytest -k test_rmsnorm</code> &mdash; <strong>passes (1/1)</strong>.</p>
+<h3 id="rmsnorm-is-element-wise-only-the-rms-itself-reduces">RMSNorm is element-wise; only the RMS itself reduces</h3>
+<p>The shape story is the whole problem: the normalization is element-wise across <code>d_model</code>, but the RMS <em>scalar</em> is computed by reducing across <code>d_model</code>. So the forward has three shape regimes layered on top of each other:</p>
+<table>
+<thead>
+<tr>
+<th>quantity</th>
+<th>shape</th>
+<th>computed by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>sum-of-squares</td>
+<td><code>(...,)</code></td>
+<td>einsum <code>"... d_model, ... d_model -&gt; ..."</code> (drops <code>d_model</code>)</td>
+</tr>
+<tr>
+<td>RMS</td>
+<td><code>(..., 1)</code></td>
+<td>sqrt of mean + eps, then <code>.unsqueeze(-1)</code> to restore the broadcast slot</td>
+</tr>
+<tr>
+<td><code>x / RMS</code></td>
+<td><code>(..., d_model)</code></td>
+<td>broadcast over the size-1 trailing axis</td>
+</tr>
+<tr>
+<td><code>(x / RMS) * weight</code></td>
+<td><code>(..., d_model)</code></td>
+<td>broadcast <code>(d_model,)</code> against <code>(..., d_model)</code></td>
+</tr>
+</tbody>
+</table>
+<p>The <code>.unsqueeze(-1)</code> matters because PyTorch broadcasting aligns from the right — without it, <code>(B, T) / (B, T, D)</code> would try to match <code>T</code> against <code>D</code> and error.<sup class="margin-marker"><a href="#note-11">11</a></sup><span class="margin-note" id="note-11"><span class="margin-note__label">Note 11</span>Equivalent alternative: <code>(x ** 2).mean(dim=-1, keepdim=True)</code> — the <code>keepdim=True</code> flag preserves a size-1 axis at the reduction position, accomplishing the same broadcasting setup without an explicit <code>unsqueeze</code>. Einsum has no <code>keepdim</code> knob, so the unsqueeze is the einsum-friendly path.</span></p>
+<h3 id="why-upcast-to-float32">Why upcast to float32</h3>
+<p>If <code>x</code> is float16 with values near $\pm 1$, squaring gives ${\sim}1$ — fine. But if any activation has magnitude $\gg 1$ (which happens early in training before RMSNorm has stabilized things), squaring can overflow float16&rsquo;s $\pm 65504$ range and produce <code>inf</code>, which then poisons the sum, the sqrt, and every downstream activation. Promoting to float32 for the RMS computation costs negligible compute and avoids a class of silent training divergences.<sup class="margin-marker"><a href="#note-12">12</a></sup><span class="margin-note" id="note-12"><span class="margin-note__label">Note 12</span>RMSNorm is one of three places where the standard advice is &ldquo;upcast then downcast&rdquo; — the others are the softmax inside attention (denominator overflow) and the final logits (cross-entropy expects float32 for numerical stability). The pattern is the same: localize the float32 calculation, restore the caller&rsquo;s dtype on return.</span></p>
+<h3 id="why-the-gain-is-initialized-to-1">Why the gain is initialized to 1</h3>
+<p>The handout (§3.3.1) lists <code>RMSNorm: 1</code> — the gain vector starts at all ones, not Xavier-scaled. At initialization, RMSNorm is the identity map (scaled by unit RMS), so signal passes through untouched. The <code>g_i</code> parameters only deviate from 1 if training discovers per-dimension scale corrections actually help — which in practice they barely do, so the gain stays close to 1 throughout. This is a common pattern for normalization layers: a learnable rescaler that defaults to &ldquo;no rescaling&rdquo; and rarely strays far.</p>
+<p><em>From <code>cs336/assignments/assignment1/assignment1-basics/cs336_basics/rms_norm.py::RMSNorm</code>:</em></p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">RMSNorm</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">d_model</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-5</span><span class="p">,</span> <span class="n">device</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dtype</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">d_model</span> <span class="o">=</span> <span class="n">d_model</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">weight</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Parameter</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">d_model</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
+
+    <span class="nd">@jaxtyped</span><span class="p">(</span><span class="n">typechecker</span><span class="o">=</span><span class="n">beartype</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... d_model&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... d_model&quot;</span><span class="p">]:</span>
+        <span class="n">in_dtype</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">dtype</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+        <span class="n">rms</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... 1&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">einsum</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="s2">&quot;... d_model, ... d_model -&gt; ...&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">d_model</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span> <span class="o">**</span> <span class="mf">0.5</span>
+        <span class="n">normed</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... d_model&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">x</span> <span class="o">/</span> <span class="n">rms</span>
+        <span class="n">result</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... d_model&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">normed</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span>
+        <span class="k">return</span> <span class="n">result</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">in_dtype</span><span class="p">)</span>
 </code></pre></div>
         </div>
       </article>

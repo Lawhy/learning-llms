@@ -235,3 +235,36 @@ In practice the forward is a one-liner that exploits PyTorch's advanced indexing
 The handout (§3.3.1) gives each module type a different init. `Linear` uses Xavier $\sigma^2 = 2/(d_\text{in}+d_\text{out})$; `Embedding` uses **plain $\sigma=1$ truncated at $\pm 3$**. The narrow Xavier σ that's correct for Linear would push embedding vectors to essentially zero for a 50 000-token vocab, which would starve the downstream RMSNorm and attention layers calibrated for unit-variance inputs.
 
 {{ include: cs336/assignments/assignment1/assignment1-basics/cs336_basics/embedding.py::Embedding }}
+
+---
+
+## Problem `rmsnorm` — Root Mean Square Layer Normalization
+
+<span class="heading-meta">1 point</span>
+
+**Question:** Implement `RMSNorm` as a `torch.nn.Module` with interface `(d_model, eps=1e-5, device=None, dtype=None)`. `forward(x)` rescales each activation by $\text{RMSNorm}(a_i) = \frac{a_i}{\text{RMS}(a)} g_i$ where $\text{RMS}(a) = \sqrt{\tfrac{1}{d_\text{model}}\sum_i a_i^2 + \varepsilon}$. Upcast to `float32` before computing RMS to avoid overflow when squaring, then downcast the result to the input dtype.
+
+**Verifying test:** `uv run pytest -k test_rmsnorm` &mdash; **passes (1/1)**.
+
+### RMSNorm is element-wise; only the RMS itself reduces
+
+The shape story is the whole problem: the normalization is element-wise across `d_model`, but the RMS *scalar* is computed by reducing across `d_model`. So the forward has three shape regimes layered on top of each other:
+
+| quantity | shape | computed by |
+|----------|-------|-------------|
+| sum-of-squares | `(...,)` | einsum `"... d_model, ... d_model -> ..."` (drops `d_model`) |
+| RMS | `(..., 1)` | sqrt of mean + eps, then `.unsqueeze(-1)` to restore the broadcast slot |
+| `x / RMS` | `(..., d_model)` | broadcast over the size-1 trailing axis |
+| `(x / RMS) * weight` | `(..., d_model)` | broadcast `(d_model,)` against `(..., d_model)` |
+
+The `.unsqueeze(-1)` matters because PyTorch broadcasting aligns from the right — without it, `(B, T) / (B, T, D)` would try to match `T` against `D` and error.<sup class="margin-marker"><a href="#note-11">11</a></sup><span class="margin-note" id="note-11"><span class="margin-note__label">Note 11</span>Equivalent alternative: `(x ** 2).mean(dim=-1, keepdim=True)` — the `keepdim=True` flag preserves a size-1 axis at the reduction position, accomplishing the same broadcasting setup without an explicit `unsqueeze`. Einsum has no `keepdim` knob, so the unsqueeze is the einsum-friendly path.</span>
+
+### Why upcast to float32
+
+If `x` is float16 with values near $\pm 1$, squaring gives ${\sim}1$ — fine. But if any activation has magnitude $\gg 1$ (which happens early in training before RMSNorm has stabilized things), squaring can overflow float16's $\pm 65504$ range and produce `inf`, which then poisons the sum, the sqrt, and every downstream activation. Promoting to float32 for the RMS computation costs negligible compute and avoids a class of silent training divergences.<sup class="margin-marker"><a href="#note-12">12</a></sup><span class="margin-note" id="note-12"><span class="margin-note__label">Note 12</span>RMSNorm is one of three places where the standard advice is "upcast then downcast" — the others are the softmax inside attention (denominator overflow) and the final logits (cross-entropy expects float32 for numerical stability). The pattern is the same: localize the float32 calculation, restore the caller's dtype on return.</span>
+
+### Why the gain is initialized to 1
+
+The handout (§3.3.1) lists `RMSNorm: 1` — the gain vector starts at all ones, not Xavier-scaled. At initialization, RMSNorm is the identity map (scaled by unit RMS), so signal passes through untouched. The `g_i` parameters only deviate from 1 if training discovers per-dimension scale corrections actually help — which in practice they barely do, so the gain stays close to 1 throughout. This is a common pattern for normalization layers: a learnable rescaler that defaults to "no rescaling" and rarely strays far.
+
+{{ include: cs336/assignments/assignment1/assignment1-basics/cs336_basics/rms_norm.py::RMSNorm }}

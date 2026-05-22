@@ -177,3 +177,61 @@ The loop terminates at a **fixed point**: when no adjacent pair in the current s
 The four sub-parts ask for compression ratios on TinyStories and OWT samples, a cross-tokenizer "what happens if you tokenize OWT with the TinyStories tokenizer?" experiment, a throughput estimate (bytes/sec → Pile extrapolation), and encoding the TinyStories+OWT train/dev datasets to integer-ID files. Three of the four depend on having both tokenizers trained; with OWT [deferred](#problem-train_bpe_expts_owt-deferred), this whole problem rides along.
 
 **Plan to revisit** alongside the OWT BPE training. The throughput estimate (c) and the cross-tokenizer (b) sub-parts are quick once OWT exists.
+
+---
+
+## Problem `linear` — Implementing the Linear Module
+
+<span class="heading-meta">1 point</span>
+
+**Question:** Implement a biasless `Linear` module subclassing `nn.Module` with interface `(in_features, out_features, device=None, dtype=None)`. Store the weight as $W$ of shape `(out_features, in_features)` (not $W^\top$), initialize with truncated normal $\mathcal{N}(0, \sigma^2 = \frac{2}{d_\text{in} + d_\text{out}})$ clipped to $[-3\sigma, 3\sigma]$.
+
+**Verifying test:** `uv run pytest -k test_linear` &mdash; **passes (1/1)**.
+
+### Storage shape vs. math shape
+
+The handout's math is column-vector ($y = Wx$ with $W$ of shape `(d_out, d_in)`), but PyTorch tensors are row-major and we batch by adding leading dims, not by stacking columns. The parameter is stored in the column-vector shape `(out_features, in_features)` and `forward` contracts the trailing axis of `x` against the trailing axis of `W` — equivalent to $Y = X W^\top$ for the row-vector convention.
+
+### einops vs. torch native
+
+The primary `forward` uses `einops.einsum` with named multi-character axes:
+
+```
+einsum(x, self.weight, "... d_in, d_out d_in -> ... d_out")
+```
+
+The names make the contraction self-documenting at the cost of one extra dependency. For a single matmul this is overkill, but it's worth practising the notation here so the multi-head attention shapes later don't become unreadable.<sup class="margin-marker"><a href="#note-8">8</a></sup><span class="margin-note" id="note-8"><span class="margin-note__label">Note 8</span>`torch.einsum` only supports single-character labels, e.g. `"...i,oi->...o"` — terse but cryptic past 3–4 axes. `einops` dispatches to the same underlying primitive, so the performance is identical; the difference is purely ergonomic.</span>
+
+`_forward` documents the torch-native equivalent (`x @ self.weight.T` or `torch.einsum("...i,oi->...o", x, self.weight)`) — kept for reference, not called by the test.
+
+### Initialization — σ vs. σ²
+
+The handout gives the *variance* $\sigma^2 = \frac{2}{d_\text{in} + d_\text{out}}$, but `trunc_normal_(std=...)` takes the *standard deviation*, so the code computes $\sigma = \sqrt{2/(d_\text{in} + d_\text{out})}$. The truncation bounds `a`, `b` must also be passed explicitly as $\pm 3\sigma$ — the function's defaults are $[-2, 2]$, which would not clip this very narrow distribution at all.<sup class="margin-marker"><a href="#note-9">9</a></sup><span class="margin-note" id="note-9"><span class="margin-note__label">Note 9</span>This is the Xavier/Glorot scheme with the gain factor of 2 used by GPT-2 / Llama. Truncating at $\pm 3\sigma$ rejects ≈0.27% of samples in the tails — enough to prevent rare extreme inits from kicking off exploding/vanishing activations in deep stacks.</span>
+
+### Device/dtype plumbing
+
+`device` and `dtype` flow straight into `torch.empty(...)` so the `Parameter` lands on the right device with the right precision the moment it's constructed. This pattern repeats for every module that holds learned weights; getting the shape of the constructor right once propagates through `Embedding`, `RMSNorm`, the FFN, attention, and the full Transformer block.
+
+{{ include: cs336/assignments/assignment1/assignment1-basics/cs336_basics/linear.py::Linear }}
+
+---
+
+## Problem `embedding` — Implementing the Embedding Module
+
+<span class="heading-meta">1 point</span>
+
+**Question:** Implement a custom `Embedding` module subclassing `nn.Module` with interface `(num_embeddings, embedding_dim, device=None, dtype=None)`. Store the embedding matrix as a `Parameter` of shape `(num_embeddings, embedding_dim)`. `forward(token_ids)` returns the embedding vectors for the given integer IDs (with any leading batch shape preserved).
+
+**Verifying test:** `uv run pytest -k test_embedding` &mdash; **passes (1/1)**.
+
+### An embedding is a one-hot times a weight matrix — implemented as a gather
+
+Mathematically, the embedding for token $t$ is $e_t^\top W$, where $e_t$ is the one-hot vector with a 1 at index $t$. The whole forward could in principle be written as an einsum `"... v, v d -> ... d"` on the one-hot representation — and that's exactly the dual of what the **output projection** at the top of the Transformer will do (`logits = hidden @ W^\top`), which is why weight-tying between input embedding and output projection is sometimes used.<sup class="margin-marker"><a href="#note-10">10</a></sup><span class="margin-note" id="note-10"><span class="margin-note__label">Note 10</span>Materializing a one-hot tensor of shape `(batch, seq, vocab_size)` wastes O(V) memory and FLOPs per token to return a result identical to a single memory read. Modern GPUs have fast gather instructions; integer indexing routes straight to them.</span>
+
+In practice the forward is a one-liner that exploits PyTorch's advanced indexing — `self.weight[token_ids]` broadcasts the lookup across any leading shape, so input of shape `(batch, seq)` returns output of shape `(batch, seq, embedding_dim)`.
+
+### Initialization — different from Linear
+
+The handout (§3.3.1) gives each module type a different init. `Linear` uses Xavier $\sigma^2 = 2/(d_\text{in}+d_\text{out})$; `Embedding` uses **plain $\sigma=1$ truncated at $\pm 3$**. The narrow Xavier σ that's correct for Linear would push embedding vectors to essentially zero for a 50 000-token vocab, which would starve the downstream RMSNorm and attention layers calibrated for unit-variance inputs.
+
+{{ include: cs336/assignments/assignment1/assignment1-basics/cs336_basics/embedding.py::Embedding }}

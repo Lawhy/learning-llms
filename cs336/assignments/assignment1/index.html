@@ -30,6 +30,8 @@
           <li><a href="#problem-train_bpe_expts_owt-deferred" data-toc>Problem train_bpe_expts_owt — Deferred</a></li>
           <li><a href="#problem-tokenizer-implementing-the-tokenizer" data-toc>Problem tokenizer — Implementing the Tokenizer</a></li>
           <li><a href="#problem-tokenizer_experiments-deferred" data-toc>Problem tokenizer_experiments — Deferred</a></li>
+          <li><a href="#problem-linear-implementing-the-linear-module" data-toc>Problem linear — Implementing the Linear Module</a></li>
+          <li><a href="#problem-embedding-implementing-the-embedding-module" data-toc>Problem embedding — Implementing the Embedding Module</a></li>
         </ul>
       </nav>
 
@@ -301,6 +303,88 @@
 <p><span class="heading-meta">4 points · not yet attempted</span></p>
 <p>The four sub-parts ask for compression ratios on TinyStories and OWT samples, a cross-tokenizer &ldquo;what happens if you tokenize OWT with the TinyStories tokenizer?&rdquo; experiment, a throughput estimate (bytes/sec → Pile extrapolation), and encoding the TinyStories+OWT train/dev datasets to integer-ID files. Three of the four depend on having both tokenizers trained; with OWT <a href="#problem-train_bpe_expts_owt-deferred">deferred</a>, this whole problem rides along.</p>
 <p><strong>Plan to revisit</strong> alongside the OWT BPE training. The throughput estimate (c) and the cross-tokenizer (b) sub-parts are quick once OWT exists.</p>
+<hr />
+<h2 id="problem-linear-implementing-the-linear-module">Problem <code>linear</code> — Implementing the Linear Module</h2>
+<p><span class="heading-meta">1 point</span></p>
+<p><strong>Question:</strong> Implement a biasless <code>Linear</code> module subclassing <code>nn.Module</code> with interface <code>(in_features, out_features, device=None, dtype=None)</code>. Store the weight as $W$ of shape <code>(out_features, in_features)</code> (not $W^\top$), initialize with truncated normal $\mathcal{N}(0, \sigma^2 = \frac{2}{d_\text{in} + d_\text{out}})$ clipped to $[-3\sigma, 3\sigma]$.</p>
+<p><strong>Verifying test:</strong> <code>uv run pytest -k test_linear</code> &mdash; <strong>passes (1/1)</strong>.</p>
+<h3 id="storage-shape-vs-math-shape">Storage shape vs. math shape</h3>
+<p>The handout&rsquo;s math is column-vector ($y = Wx$ with $W$ of shape <code>(d_out, d_in)</code>), but PyTorch tensors are row-major and we batch by adding leading dims, not by stacking columns. The parameter is stored in the column-vector shape <code>(out_features, in_features)</code> and <code>forward</code> contracts the trailing axis of <code>x</code> against the trailing axis of <code>W</code> — equivalent to $Y = X W^\top$ for the row-vector convention.</p>
+<h3 id="einops-vs-torch-native">einops vs. torch native</h3>
+<p>The primary <code>forward</code> uses <code>einops.einsum</code> with named multi-character axes:</p>
+<div class="highlight"><pre><span></span><code>einsum(x, self.weight, &quot;... d_in, d_out d_in -&gt; ... d_out&quot;)
+</code></pre></div>
+
+<p>The names make the contraction self-documenting at the cost of one extra dependency. For a single matmul this is overkill, but it&rsquo;s worth practising the notation here so the multi-head attention shapes later don&rsquo;t become unreadable.<sup class="margin-marker"><a href="#note-8">8</a></sup><span class="margin-note" id="note-8"><span class="margin-note__label">Note 8</span><code>torch.einsum</code> only supports single-character labels, e.g. <code>"...i,oi-&gt;...o"</code> — terse but cryptic past 3–4 axes. <code>einops</code> dispatches to the same underlying primitive, so the performance is identical; the difference is purely ergonomic.</span></p>
+<p><code>_forward</code> documents the torch-native equivalent (<code>x @ self.weight.T</code> or <code>torch.einsum("...i,oi-&gt;...o", x, self.weight)</code>) — kept for reference, not called by the test.</p>
+<h3 id="initialization-vs-2">Initialization — σ vs. σ²</h3>
+<p>The handout gives the <em>variance</em> $\sigma^2 = \frac{2}{d_\text{in} + d_\text{out}}$, but <code>trunc_normal_(std=...)</code> takes the <em>standard deviation</em>, so the code computes $\sigma = \sqrt{2/(d_\text{in} + d_\text{out})}$. The truncation bounds <code>a</code>, <code>b</code> must also be passed explicitly as $\pm 3\sigma$ — the function&rsquo;s defaults are $[-2, 2]$, which would not clip this very narrow distribution at all.<sup class="margin-marker"><a href="#note-9">9</a></sup><span class="margin-note" id="note-9"><span class="margin-note__label">Note 9</span>This is the Xavier/Glorot scheme with the gain factor of 2 used by GPT-2 / Llama. Truncating at $\pm 3\sigma$ rejects ≈0.27% of samples in the tails — enough to prevent rare extreme inits from kicking off exploding/vanishing activations in deep stacks.</span></p>
+<h3 id="devicedtype-plumbing">Device/dtype plumbing</h3>
+<p><code>device</code> and <code>dtype</code> flow straight into <code>torch.empty(...)</code> so the <code>Parameter</code> lands on the right device with the right precision the moment it&rsquo;s constructed. This pattern repeats for every module that holds learned weights; getting the shape of the constructor right once propagates through <code>Embedding</code>, <code>RMSNorm</code>, the FFN, attention, and the full Transformer block.</p>
+<p><em>From <code>cs336/assignments/assignment1/assignment1-basics/cs336_basics/linear.py::Linear</code>:</em></p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">Linear</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">in_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">out_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">device</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">dtype</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">weight</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Parameter</span><span class="p">(</span>
+            <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">out_features</span><span class="p">,</span> <span class="n">in_features</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">sigma</span> <span class="o">=</span> <span class="p">(</span><span class="mi">2</span> <span class="o">/</span> <span class="p">(</span><span class="n">in_features</span> <span class="o">+</span> <span class="n">out_features</span><span class="p">))</span> <span class="o">**</span> <span class="mf">0.5</span>
+        <span class="n">nn</span><span class="o">.</span><span class="n">init</span><span class="o">.</span><span class="n">trunc_normal_</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="p">,</span> <span class="n">mean</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">std</span><span class="o">=</span><span class="n">sigma</span><span class="p">,</span> <span class="n">a</span><span class="o">=-</span><span class="mi">3</span> <span class="o">*</span> <span class="n">sigma</span><span class="p">,</span> <span class="n">b</span><span class="o">=</span><span class="mi">3</span> <span class="o">*</span> <span class="n">sigma</span><span class="p">)</span>
+
+    <span class="nd">@jaxtyped</span><span class="p">(</span><span class="n">typechecker</span><span class="o">=</span><span class="n">beartype</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot;... in_features&quot;</span><span class="p">]</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot;... out_features&quot;</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="n">einsum</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="p">,</span> <span class="s2">&quot;... d_in, d_out d_in -&gt; ... d_out&quot;</span><span class="p">)</span>
+
+    <span class="nd">@jaxtyped</span><span class="p">(</span><span class="n">typechecker</span><span class="o">=</span><span class="n">beartype</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_forward</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot;... in_features&quot;</span><span class="p">]</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot;... out_features&quot;</span><span class="p">]:</span>
+        <span class="c1"># Torch-native equivalent of forward(), kept for reference.</span>
+        <span class="c1"># Either of these matches the einops version above:</span>
+        <span class="c1">#     return torch.einsum(&quot;...i,oi-&gt;...o&quot;, x, self.weight)</span>
+        <span class="c1">#     return x @ self.weight.T</span>
+        <span class="k">return</span> <span class="n">x</span> <span class="o">@</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">T</span>
+</code></pre></div>
+
+<hr />
+<h2 id="problem-embedding-implementing-the-embedding-module">Problem <code>embedding</code> — Implementing the Embedding Module</h2>
+<p><span class="heading-meta">1 point</span></p>
+<p><strong>Question:</strong> Implement a custom <code>Embedding</code> module subclassing <code>nn.Module</code> with interface <code>(num_embeddings, embedding_dim, device=None, dtype=None)</code>. Store the embedding matrix as a <code>Parameter</code> of shape <code>(num_embeddings, embedding_dim)</code>. <code>forward(token_ids)</code> returns the embedding vectors for the given integer IDs (with any leading batch shape preserved).</p>
+<p><strong>Verifying test:</strong> <code>uv run pytest -k test_embedding</code> &mdash; <strong>passes (1/1)</strong>.</p>
+<h3 id="an-embedding-is-a-one-hot-times-a-weight-matrix-implemented-as-a-gather">An embedding is a one-hot times a weight matrix — implemented as a gather</h3>
+<p>Mathematically, the embedding for token $t$ is $e_t^\top W$, where $e_t$ is the one-hot vector with a 1 at index $t$. The whole forward could in principle be written as an einsum <code>"... v, v d -&gt; ... d"</code> on the one-hot representation — and that&rsquo;s exactly the dual of what the <strong>output projection</strong> at the top of the Transformer will do (<code>logits = hidden @ W^\top</code>), which is why weight-tying between input embedding and output projection is sometimes used.<sup class="margin-marker"><a href="#note-10">10</a></sup><span class="margin-note" id="note-10"><span class="margin-note__label">Note 10</span>Materializing a one-hot tensor of shape <code>(batch, seq, vocab_size)</code> wastes O(V) memory and FLOPs per token to return a result identical to a single memory read. Modern GPUs have fast gather instructions; integer indexing routes straight to them.</span></p>
+<p>In practice the forward is a one-liner that exploits PyTorch&rsquo;s advanced indexing — <code>self.weight[token_ids]</code> broadcasts the lookup across any leading shape, so input of shape <code>(batch, seq)</code> returns output of shape <code>(batch, seq, embedding_dim)</code>.</p>
+<h3 id="initialization-different-from-linear">Initialization — different from Linear</h3>
+<p>The handout (§3.3.1) gives each module type a different init. <code>Linear</code> uses Xavier $\sigma^2 = 2/(d_\text{in}+d_\text{out})$; <code>Embedding</code> uses <strong>plain $\sigma=1$ truncated at $\pm 3$</strong>. The narrow Xavier σ that&rsquo;s correct for Linear would push embedding vectors to essentially zero for a 50 000-token vocab, which would starve the downstream RMSNorm and attention layers calibrated for unit-variance inputs.</p>
+<p><em>From <code>cs336/assignments/assignment1/assignment1-basics/cs336_basics/embedding.py::Embedding</code>:</em></p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">Embedding</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">num_embeddings</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">embedding_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">device</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">dtype</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">weight</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Parameter</span><span class="p">(</span>
+            <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">num_embeddings</span><span class="p">,</span> <span class="n">embedding_dim</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">nn</span><span class="o">.</span><span class="n">init</span><span class="o">.</span><span class="n">trunc_normal_</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="p">,</span> <span class="n">mean</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">std</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">a</span><span class="o">=-</span><span class="mi">3</span><span class="p">,</span> <span class="n">b</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+
+    <span class="nd">@jaxtyped</span><span class="p">(</span><span class="n">typechecker</span><span class="o">=</span><span class="n">beartype</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">token_ids</span><span class="p">:</span> <span class="n">Int</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot;...&quot;</span><span class="p">]</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot;... embedding_dim&quot;</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="p">[</span><span class="n">token_ids</span><span class="p">]</span>
+</code></pre></div>
         </div>
       </article>
     </div>

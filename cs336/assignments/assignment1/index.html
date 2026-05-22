@@ -392,6 +392,11 @@
 <p><span class="heading-meta">1 point</span></p>
 <p><strong>Question:</strong> Implement <code>RMSNorm</code> as a <code>torch.nn.Module</code> with interface <code>(d_model, eps=1e-5, device=None, dtype=None)</code>. <code>forward(x)</code> rescales each activation by $\text{RMSNorm}(a_i) = \frac{a_i}{\text{RMS}(a)} g_i$ where $\text{RMS}(a) = \sqrt{\tfrac{1}{d_\text{model}}\sum_i a_i^2 + \varepsilon}$. Upcast to <code>float32</code> before computing RMS to avoid overflow when squaring, then downcast the result to the input dtype.</p>
 <p><strong>Verifying test:</strong> <code>uv run pytest -k test_rmsnorm</code> &mdash; <strong>passes (1/1)</strong>.</p>
+<h3 id="why-rms-as-the-normalizing-term">Why RMS as the normalizing term</h3>
+<blockquote>
+<p>Normalize like L2, but with a zero-mean assumption and a $\sqrt{d}$ rescale so each component lands at $\mathcal{O}(1)$.</p>
+</blockquote>
+<p>Three observations packed into one formula. <strong>(1) Like L2</strong> — Euclidean / rotation-invariant magnitude is the only kind that&rsquo;s basis-independent, which matters because linear layers freely rotate features through the residual stream. <strong>(2) Zero-mean assumption</strong> — LayerNorm subtracts the mean first; RMSNorm skips it because trained residual streams have $\mu \approx 0$ anyway, and any leftover constant offset gets absorbed by the next layer&rsquo;s bias. <strong>(3) Per-component $\mathcal{O}(1)$</strong> — pure L2 normalization would put each component at $\mathcal{O}(1/\sqrt{d})$, which downstream attention/FFN layers aren&rsquo;t calibrated for; dividing by RMS (which already has the $1/\sqrt{d}$ baked in) restores unit per-component scale.</p>
 <h3 id="rmsnorm-is-element-wise-only-the-rms-itself-reduces">RMSNorm is element-wise; only the RMS itself reduces</h3>
 <p>The shape story is the whole problem: the normalization is element-wise across <code>d_model</code>, but the RMS <em>scalar</em> is computed by reducing across <code>d_model</code>. So the forward has three shape regimes layered on top of each other:</p>
 <table>

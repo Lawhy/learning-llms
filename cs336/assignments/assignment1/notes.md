@@ -246,6 +246,12 @@ The handout (§3.3.1) gives each module type a different init. `Linear` uses Xav
 
 **Verifying test:** `uv run pytest -k test_rmsnorm` &mdash; **passes (1/1)**.
 
+### Why RMS as the normalizing term
+
+> Normalize like L2, but with a zero-mean assumption and a $\sqrt{d}$ rescale so each component lands at $\mathcal{O}(1)$.
+
+Three observations packed into one formula. **(1) Like L2** — Euclidean / rotation-invariant magnitude is the only kind that's basis-independent, which matters because linear layers freely rotate features through the residual stream. **(2) Zero-mean assumption** — LayerNorm subtracts the mean first; RMSNorm skips it because trained residual streams have $\mu \approx 0$ anyway, and any leftover constant offset gets absorbed by the next layer's bias. **(3) Per-component $\mathcal{O}(1)$** — pure L2 normalization would put each component at $\mathcal{O}(1/\sqrt{d})$, which downstream attention/FFN layers aren't calibrated for; dividing by RMS (which already has the $1/\sqrt{d}$ baked in) restores unit per-component scale.
+
 ### RMSNorm is element-wise; only the RMS itself reduces
 
 The shape story is the whole problem: the normalization is element-wise across `d_model`, but the RMS *scalar* is computed by reducing across `d_model`. So the forward has three shape regimes layered on top of each other:

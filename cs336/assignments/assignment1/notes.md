@@ -337,3 +337,148 @@ The architecture works; the precise reason is still debated.
 {{ include: cs336/assignments/assignment1/assignment1-basics/cs336_basics/swiglu.py::SwiGLU }}
 
 {{ include: cs336/assignments/assignment1/assignment1-basics/cs336_basics/swiglu.py::silu }}
+
+---
+
+## Problem `rope` — Rotary Position Embeddings
+
+<span class="heading-meta">2 points</span>
+
+**Question:** Implement `RotaryPositionalEmbedding` that injects positional information by *rotating* each query/key vector in pre-computed 2D subspaces. The rotation angle per subspace depends on the token's position and a frequency schedule $\theta_{i,k} = i / \Theta^{(2k-2)/d_k}$. Layer has **no learnable parameters** — cosines/sines are precomputed as buffers.
+
+Interface:
+
+```python
+def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None)
+def forward(self, x: Float[Tensor, "... seq_len d_k"], token_positions: Int[Tensor, "... seq_len"]) -> Float[Tensor, "... seq_len d_k"]
+```
+
+**Verifying test:** `uv run pytest -k test_rope` &mdash; **passes (1/1)**.
+
+### The problem RoPE solves
+
+Self-attention is **permutation-invariant by default**: $\text{Attention}(QKV)$ on $[\text{cat}, \text{sat}, \text{on}]$ gives the same scores as on $[\text{sat}, \text{on}, \text{cat}]$ if you reorder consistently. Language is *not* permutation-invariant — "the dog bit the man" $\neq$ "the man bit the dog." So we need to inject **token positions** somewhere into the computation.
+
+The original Transformer added a positional encoding to the embeddings ($x_i \leftarrow x_i + p_i$). That works but has two issues:
+1. The position information has to *survive* every layer, while being slowly overwritten by the residual stream's content updates.
+2. The model has to learn that "$p_3 - p_1$ means 2 positions apart" — relative position is encoded *implicitly* and indirectly.
+
+RoPE's trick: **apply position as a rotation, not as an addition**, and apply it inside attention's $Q$ and $K$ specifically (not to the residual stream at all). The geometry makes the attention dot product depend *only on the relative position* between query and key — which is exactly what language modeling wants.
+
+### Worked example: the simplest possible case ($d_k = 2$)
+
+Take the smallest interesting query/key dim: $d_k = 2$. Suppose two tokens have *identical* content vectors but live at different positions:
+
+$$q = \begin{bmatrix} 1 \\ 0 \end{bmatrix} \text{ at position } i = 1, \qquad k = \begin{bmatrix} 1 \\ 0 \end{bmatrix} \text{ at position } j = 3.$$
+
+**Without positional encoding**, $q^\top k = 1$ — attention can't tell these tokens apart by position.
+
+**With RoPE**, rotate each vector by an angle proportional to its position. Use $\theta = 30°$ per position step (so position 1 → $30°$, position 3 → $90°$). The 2D rotation matrix is:
+
+$$R(\theta) = \begin{bmatrix} \cos\theta & -\sin\theta \\ \sin\theta & \cos\theta \end{bmatrix}$$
+
+Rotate $q$ by $30°$ and $k$ by $90°$:
+
+$$R(30°) q = \begin{bmatrix} 0.866 \\ 0.5 \end{bmatrix}, \qquad R(90°) k = \begin{bmatrix} 0 \\ 1 \end{bmatrix}.$$
+
+Their dot product:
+
+$$\big(R(30°) q\big)^\top \big(R(90°) k\big) = 0.866 \cdot 0 + 0.5 \cdot 1 = 0.5 = \cos(60°).$$
+
+**The result is $\cos$ of the relative angle** — and $60° = 90° - 30°$ is determined entirely by the position *difference* $j - i = 2$ steps. The absolute positions $i = 1$ and $j = 3$ never appear in the answer.
+
+### Why the dot product is purely relative
+
+The algebra behind the example. For any rotation matrices, $R(\alpha)^\top R(\beta) = R(\beta - \alpha)$. So:
+
+$$\big(R(\theta_i) q\big)^\top \big(R(\theta_j) k\big) = q^\top R(\theta_i)^\top R(\theta_j) k = q^\top R(\theta_j - \theta_i) k.$$
+
+The post-rotation dot product equals $q^\top \cdot (\text{rotation by relative angle}) \cdot k$. Absolute angles cancel. This is the **single mathematical property** that makes RoPE work as a positional encoding.
+
+A nice consequence: $\|R(\theta) v\| = \|v\|$ for any $\theta$ — rotations preserve magnitude. So RoPE doesn't change the scale of $q$ or $k$, which means it doesn't perturb attention's scaling assumptions ($\sqrt{d_k}$ denominator).<sup class="margin-marker"><a href="#note-16">16</a></sup><span class="margin-note" id="note-16"><span class="margin-note__label">Note 16</span>Compare to the additive sinusoidal scheme: adding $p_i$ to $x_i$ changes the magnitude of $x_i$ unpredictably (sometimes amplifying, sometimes cancelling), and the relative-position property only holds approximately. RoPE's magnitude-preserving rotation is structurally cleaner.</span>
+
+### Extending to $d_k > 2$: block-diagonal rotation
+
+Real query/key vectors are much wider — typically $d_k = 64$ or $128$. The trick is to **decompose the $d_k$-dim vector into $d_k/2$ independent 2D pairs**, each rotated in its own 2D subspace by its own angle:
+
+$$R^i = \begin{pmatrix} R^i_1 & 0 & \cdots & 0 \\ 0 & R^i_2 & \cdots & 0 \\ \vdots & & \ddots & \vdots \\ 0 & 0 & \cdots & R^i_{d/2} \end{pmatrix}$$
+
+Each $R^i_k$ is a 2D rotation block of the form shown above, applied to the $k$-th pair of consecutive dimensions $(x_{2k-1}, x_{2k})$. The relative-angle dot-product property holds **per pair** and therefore for the sum over all pairs — so the full $d_k$-dim dot product also depends only on relative position (linearly combined across $d_k/2$ frequencies).
+
+### The frequency schedule: why each pair gets a different rate
+
+Each pair $k$ uses a different angular speed:
+
+$$\theta_{i,k} = \frac{i}{\Theta^{(2k-2)/d_k}}, \qquad \text{where } \Theta = 10\,000 \text{ typically}.$$
+
+For pair $k = 1$ the denominator is $\Theta^0 = 1$, so the angle is just $i$ — **one full revolution every $2\pi$ position steps** (fast rotation, captures *local* position).
+
+For pair $k = d_k/2$ the denominator is $\Theta^{(d_k - 2)/d_k} \approx \Theta$, so the angle is $i / \Theta \approx i / 10000$ — **one full revolution every $20\,000 \cdot \pi$ position steps** (slow rotation, captures *long-range* position).
+
+#### Worked frequency example ($d_k = 4$, $\Theta = 10\,000$)
+
+Two pairs, two frequencies. Let's tabulate angles at a few positions:
+
+| position $i$ | pair 1 angle ($\Theta^0 = 1$) | pair 2 angle ($\Theta^{1} \approx 100$) |
+|---|---|---|
+| 1 | 1 rad ≈ 57° | 0.01 rad ≈ 0.57° |
+| 10 | 10 rad ≈ 573° (almost 2 revolutions) | 0.1 rad ≈ 5.7° |
+| 100 | 100 rad (≈ 16 full revolutions) | 1 rad ≈ 57° |
+| 1000 | 1000 rad (essentially scrambled) | 10 rad ≈ 573° |
+
+Pair 1 rotates so fast that it's already "wrapping around" at position 10. Pair 2 rotates slowly enough that even at position 100 it has only made one revolution. The model gets **multi-scale positional information**: high-frequency pairs distinguish close neighbors, low-frequency pairs distinguish far-apart tokens.
+
+This is identical in spirit to the original sinusoidal positional encoding — a Fourier-like basis over position — but applied as a *rotation* rather than an *addition*.<sup class="margin-marker"><a href="#note-17">17</a></sup><span class="margin-note" id="note-17"><span class="margin-note__label">Note 17</span>The base $\Theta = 10\,000$ is tunable. Llama 1/2 used 10 000; long-context Llama 3 raised it (sometimes to 500 000+) to spread the low-frequency pairs across a wider position range, which is the simplest "context extension" trick. Larger $\Theta$ → longer effective context.</span>
+
+#### Why this gives *multi-scale* position resolution
+
+The previous table looks at absolute angles, but attention reads position information through the *dot product* $q_i^\top R(\Delta\theta) k_j$ — what actually matters is the **angle difference** $\Delta\theta_{i \to j, k} = (j - i) \cdot \text{freq}_k$, not the absolute angle of either token. So each pair encodes a particular **range of position differences**, and its informativeness drops off outside that range:
+
+| $\Delta\theta$ value | What attention sees |
+|---|---|
+| Near 0 ($\Delta\theta \ll 1$) | $\cos\Delta\theta \approx 1$ — looks like no position offset |
+| Around 1 to $\pi$ rad | Informative — distinguishable signal |
+| Past $\pi$, wrapping toward $2\pi$ | Aliasing — distant positions collide with closer ones |
+
+The "sweet spot" for each pair is where $\Delta\theta$ lands in the middle range. For $d_k = 8$, $\Theta = 10\,000$ (frequencies $[1, 0.1, 0.01, 0.001]$):
+
+| $\|j - i\|$ | pair 1 (freq 1) | pair 2 (freq 0.1) | pair 3 (freq 0.01) | pair 4 (freq 0.001) |
+|---|---|---|---|---|
+| 1 | **clear** (1 rad) | small (0.1) | tiny | invisible |
+| 10 | wrapped — noisy | **clear** (1 rad) | small | tiny |
+| 100 | noise | wrapped — noisy | **clear** (1 rad) | small |
+| 1000 | noise | noise | wrapped — noisy | **clear** (1 rad) |
+
+Each pair's sweet spot sits one decade slower than the previous: pair 1 distinguishes immediate neighbors, pair 4 distinguishes positions roughly a thousand apart. Combined, the $d_k/2$ pairs give a **logarithmically spaced Fourier basis over position differences** — fine resolution locally, coarse resolution at long range, with each frequency band handling its own scale.<sup class="margin-marker"><a href="#note-18">18</a></sup><span class="margin-note" id="note-18"><span class="margin-note__label">Note 18</span>This is why "smaller angle diff per position step" enables longer-range encoding: it lets the slow pair's sweet spot extend out to position differences in the thousands without wrapping. Raising $\Theta$ slides every pair's sweet spot further out, which is the geometric reason the $\Theta$ trick extends usable context length.</span>
+
+### Implementation strategy
+
+Three pieces:
+
+1. **Precompute** the $\cos$ and $\sin$ tables of shape $(\text{max\_seq\_len}, d_k/2)$ in `__init__`. Each entry is $\cos\theta_{i,k}$ / $\sin\theta_{i,k}$ for token position $i$, pair index $k$. Store with `self.register_buffer("cos", ..., persistent=False)` — buffers are part of the module's device/dtype tree but **not** parameters and **not** saved to state_dict.
+
+2. **Look up** by `token_positions` in `forward`. The input `x` has shape `(..., seq_len, d_k)`. Split the last dim into pairs (shape `(..., seq_len, d_k/2, 2)` if reshape, or grab even/odd entries directly), then index the precomputed cos/sin tables by `token_positions` to get rotation factors of matching shape.
+
+3. **Apply the 2D rotation pairwise**:
+   $$\begin{aligned} x'_{2k-1} &= x_{2k-1} \cos\theta_{i,k} - x_{2k} \sin\theta_{i,k} \\ x'_{2k} &= x_{2k-1} \sin\theta_{i,k} + x_{2k} \cos\theta_{i,k} \end{aligned}$$
+
+   This is just the 2D rotation matrix multiplication applied element-wise across all pairs and positions. No `nn.Parameter` anywhere.
+
+### Why precompute, why a buffer
+
+- **No learnable params** — the rotation angles are *deterministic functions of position*, not learned. The PDF is explicit: don't use `nn.Parameter`, use `register_buffer(persistent=False)`.
+- **`persistent=False`** — the buffer doesn't get saved/loaded by `state_dict`. Since it's fully reconstructible from `theta`, `d_k`, and `max_seq_len`, there's no point persisting it. (It would also blow up checkpoint size for long context.)
+- **Single RoPE module shared across all layers** — every Transformer block applies the same rotation rules to its $Q$ and $K$. The PDF suggests a single module referenced by all layers, which makes the precompute amortize across the whole model.
+
+### Convention gotcha: adjacent-pair vs. halved-pair layout
+
+A subtle bug worth knowing about: the *math* of RoPE is layout-agnostic at the attention dot-product level (Q^⊤K is just $\sum_i Q_i K_i$, which doesn't care how pair components are arranged in $d_k$), but the *element-wise output tensor* is layout-specific. Two valid conventions in the literature:
+
+| Convention | Pair $k$ contains... | Output assembly |
+|---|---|---|
+| **Adjacent-pair** (PDF, Su et al. original) | $(x_{2k}, x_{2k+1})$ — consecutive dims | Interleave rotated halves: `stack(..., dim=-1).flatten(-2)` |
+| **Halved-pair** (Llama, GPU-friendly) | $(x_k, x_{k+d_k/2})$ — first half + second half | Concatenate rotated halves: `cat(..., dim=-1)` |
+
+The implementation here uses adjacent-pair (matching the PDF). A *consistent* halved-pair implementation would also work — and would produce identical attention scores in a self-contained model — but it would fail this assignment's test (which compares element-by-element against an adjacent-pair reference) and break compatibility with Llama-format pretrained weights.<sup class="margin-marker"><a href="#note-19">19</a></sup><span class="margin-note" id="note-19"><span class="margin-note__label">Note 19</span>The trap: splitting with adjacent indexing (`::2`, `1::2`) but assembling with halved concatenation (`torch.cat`) produces a *hybrid* layout that matches neither standard. The rotations are mathematically correct but the output ordering is non-standard — element-wise wrong, but dot-product correct if used end-to-end. The lesson: tensor layout is part of the contract between modules. Two equivalent maths produce different bytes; the test enforces canonical bytes.</span>
+
+{{ include: cs336/assignments/assignment1/assignment1-basics/cs336_basics/rope.py::RoPE }}

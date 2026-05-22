@@ -34,6 +34,7 @@
           <li><a href="#problem-embedding-implementing-the-embedding-module" data-toc>Problem embedding — Implementing the Embedding Module</a></li>
           <li><a href="#problem-rmsnorm-root-mean-square-layer-normalization" data-toc>Problem rmsnorm — Root Mean Square Layer Normalization</a></li>
           <li><a href="#problem-positionwise_feedforward-swiglu-ffn" data-toc>Problem positionwise_feedforward — SwiGLU FFN</a></li>
+          <li><a href="#problem-rope-rotary-position-embeddings" data-toc>Problem rope — Rotary Position Embeddings</a></li>
         </ul>
       </nav>
 
@@ -541,6 +542,223 @@
 <span class="sd">        Float[Tensor, &quot; ... d_ff&quot;]: The output tensor.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">return</span> <span class="n">x</span> <span class="o">*</span> <span class="n">torch</span><span class="o">.</span><span class="n">sigmoid</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</code></pre></div>
+
+<hr />
+<h2 id="problem-rope-rotary-position-embeddings">Problem <code>rope</code> — Rotary Position Embeddings</h2>
+<p><span class="heading-meta">2 points</span></p>
+<p><strong>Question:</strong> Implement <code>RotaryPositionalEmbedding</code> that injects positional information by <em>rotating</em> each query/key vector in pre-computed 2D subspaces. The rotation angle per subspace depends on the token&rsquo;s position and a frequency schedule $\theta_{i,k} = i / \Theta^{(2k-2)/d_k}$. Layer has <strong>no learnable parameters</strong> — cosines/sines are precomputed as buffers.</p>
+<p>Interface:</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">theta</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">d_k</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">max_seq_len</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot;... seq_len d_k&quot;</span><span class="p">],</span> <span class="n">token_positions</span><span class="p">:</span> <span class="n">Int</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot;... seq_len&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot;... seq_len d_k&quot;</span><span class="p">]</span>
+</code></pre></div>
+
+<p><strong>Verifying test:</strong> <code>uv run pytest -k test_rope</code> &mdash; <strong>passes (1/1)</strong>.</p>
+<h3 id="the-problem-rope-solves">The problem RoPE solves</h3>
+<p>Self-attention is <strong>permutation-invariant by default</strong>: $\text{Attention}(QKV)$ on $[\text{cat}, \text{sat}, \text{on}]$ gives the same scores as on $[\text{sat}, \text{on}, \text{cat}]$ if you reorder consistently. Language is <em>not</em> permutation-invariant — &ldquo;the dog bit the man&rdquo; $\neq$ &ldquo;the man bit the dog.&rdquo; So we need to inject <strong>token positions</strong> somewhere into the computation.</p>
+<p>The original Transformer added a positional encoding to the embeddings ($x_i \leftarrow x_i + p_i$). That works but has two issues:
+1. The position information has to <em>survive</em> every layer, while being slowly overwritten by the residual stream&rsquo;s content updates.
+2. The model has to learn that &ldquo;$p_3 - p_1$ means 2 positions apart&rdquo; — relative position is encoded <em>implicitly</em> and indirectly.</p>
+<p>RoPE&rsquo;s trick: <strong>apply position as a rotation, not as an addition</strong>, and apply it inside attention&rsquo;s $Q$ and $K$ specifically (not to the residual stream at all). The geometry makes the attention dot product depend <em>only on the relative position</em> between query and key — which is exactly what language modeling wants.</p>
+<h3 id="worked-example-the-simplest-possible-case-math0075">Worked example: the simplest possible case ($d_k = 2$)</h3>
+<p>Take the smallest interesting query/key dim: $d_k = 2$. Suppose two tokens have <em>identical</em> content vectors but live at different positions:</p>
+<p>$$q = \begin{bmatrix} 1 \\ 0 \end{bmatrix} \text{ at position } i = 1, \qquad k = \begin{bmatrix} 1 \\ 0 \end{bmatrix} \text{ at position } j = 3.$$</p>
+<p><strong>Without positional encoding</strong>, $q^\top k = 1$ — attention can&rsquo;t tell these tokens apart by position.</p>
+<p><strong>With RoPE</strong>, rotate each vector by an angle proportional to its position. Use $\theta = 30°$ per position step (so position 1 → $30°$, position 3 → $90°$). The 2D rotation matrix is:</p>
+<p>$$R(\theta) = \begin{bmatrix} \cos\theta & -\sin\theta \\ \sin\theta & \cos\theta \end{bmatrix}$$</p>
+<p>Rotate $q$ by $30°$ and $k$ by $90°$:</p>
+<p>$$R(30°) q = \begin{bmatrix} 0.866 \\ 0.5 \end{bmatrix}, \qquad R(90°) k = \begin{bmatrix} 0 \\ 1 \end{bmatrix}.$$</p>
+<p>Their dot product:</p>
+<p>$$\big(R(30°) q\big)^\top \big(R(90°) k\big) = 0.866 \cdot 0 + 0.5 \cdot 1 = 0.5 = \cos(60°).$$</p>
+<p><strong>The result is $\cos$ of the relative angle</strong> — and $60° = 90° - 30°$ is determined entirely by the position <em>difference</em> $j - i = 2$ steps. The absolute positions $i = 1$ and $j = 3$ never appear in the answer.</p>
+<h3 id="why-the-dot-product-is-purely-relative">Why the dot product is purely relative</h3>
+<p>The algebra behind the example. For any rotation matrices, $R(\alpha)^\top R(\beta) = R(\beta - \alpha)$. So:</p>
+<p>$$\big(R(\theta_i) q\big)^\top \big(R(\theta_j) k\big) = q^\top R(\theta_i)^\top R(\theta_j) k = q^\top R(\theta_j - \theta_i) k.$$</p>
+<p>The post-rotation dot product equals $q^\top \cdot (\text{rotation by relative angle}) \cdot k$. Absolute angles cancel. This is the <strong>single mathematical property</strong> that makes RoPE work as a positional encoding.</p>
+<p>A nice consequence: $\|R(\theta) v\| = \|v\|$ for any $\theta$ — rotations preserve magnitude. So RoPE doesn&rsquo;t change the scale of $q$ or $k$, which means it doesn&rsquo;t perturb attention&rsquo;s scaling assumptions ($\sqrt{d_k}$ denominator).<sup class="margin-marker"><a href="#note-16">16</a></sup><span class="margin-note" id="note-16"><span class="margin-note__label">Note 16</span>Compare to the additive sinusoidal scheme: adding $p_i$ to $x_i$ changes the magnitude of $x_i$ unpredictably (sometimes amplifying, sometimes cancelling), and the relative-position property only holds approximately. RoPE&rsquo;s magnitude-preserving rotation is structurally cleaner.</span></p>
+<h3 id="extending-to-math0100-block-diagonal-rotation">Extending to $d_k > 2$: block-diagonal rotation</h3>
+<p>Real query/key vectors are much wider — typically $d_k = 64$ or $128$. The trick is to <strong>decompose the $d_k$-dim vector into $d_k/2$ independent 2D pairs</strong>, each rotated in its own 2D subspace by its own angle:</p>
+<p>$$R^i = \begin{pmatrix} R^i_1 & 0 & \cdots & 0 \\ 0 & R^i_2 & \cdots & 0 \\ \vdots & & \ddots & \vdots \\ 0 & 0 & \cdots & R^i_{d/2} \end{pmatrix}$$</p>
+<p>Each $R^i_k$ is a 2D rotation block of the form shown above, applied to the $k$-th pair of consecutive dimensions $(x_{2k-1}, x_{2k})$. The relative-angle dot-product property holds <strong>per pair</strong> and therefore for the sum over all pairs — so the full $d_k$-dim dot product also depends only on relative position (linearly combined across $d_k/2$ frequencies).</p>
+<h3 id="the-frequency-schedule-why-each-pair-gets-a-different-rate">The frequency schedule: why each pair gets a different rate</h3>
+<p>Each pair $k$ uses a different angular speed:</p>
+<p>$$\theta_{i,k} = \frac{i}{\Theta^{(2k-2)/d_k}}, \qquad \text{where } \Theta = 10\,000 \text{ typically}.$$</p>
+<p>For pair $k = 1$ the denominator is $\Theta^0 = 1$, so the angle is just $i$ — <strong>one full revolution every $2\pi$ position steps</strong> (fast rotation, captures <em>local</em> position).</p>
+<p>For pair $k = d_k/2$ the denominator is $\Theta^{(d_k - 2)/d_k} \approx \Theta$, so the angle is $i / \Theta \approx i / 10000$ — <strong>one full revolution every $20\,000 \cdot \pi$ position steps</strong> (slow rotation, captures <em>long-range</em> position).</p>
+<h4 id="worked-frequency-example-math0119-math0120">Worked frequency example ($d_k = 4$, $\Theta = 10\,000$)</h4>
+<p>Two pairs, two frequencies. Let&rsquo;s tabulate angles at a few positions:</p>
+<table>
+<thead>
+<tr>
+<th>position $i$</th>
+<th>pair 1 angle ($\Theta^0 = 1$)</th>
+<th>pair 2 angle ($\Theta^{1} \approx 100$)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>1 rad ≈ 57°</td>
+<td>0.01 rad ≈ 0.57°</td>
+</tr>
+<tr>
+<td>10</td>
+<td>10 rad ≈ 573° (almost 2 revolutions)</td>
+<td>0.1 rad ≈ 5.7°</td>
+</tr>
+<tr>
+<td>100</td>
+<td>100 rad (≈ 16 full revolutions)</td>
+<td>1 rad ≈ 57°</td>
+</tr>
+<tr>
+<td>1000</td>
+<td>1000 rad (essentially scrambled)</td>
+<td>10 rad ≈ 573°</td>
+</tr>
+</tbody>
+</table>
+<p>Pair 1 rotates so fast that it&rsquo;s already &ldquo;wrapping around&rdquo; at position 10. Pair 2 rotates slowly enough that even at position 100 it has only made one revolution. The model gets <strong>multi-scale positional information</strong>: high-frequency pairs distinguish close neighbors, low-frequency pairs distinguish far-apart tokens.</p>
+<p>This is identical in spirit to the original sinusoidal positional encoding — a Fourier-like basis over position — but applied as a <em>rotation</em> rather than an <em>addition</em>.<sup class="margin-marker"><a href="#note-17">17</a></sup><span class="margin-note" id="note-17"><span class="margin-note__label">Note 17</span>The base $\Theta = 10\,000$ is tunable. Llama 1/2 used 10 000; long-context Llama 3 raised it (sometimes to 500 000+) to spread the low-frequency pairs across a wider position range, which is the simplest &ldquo;context extension&rdquo; trick. Larger $\Theta$ → longer effective context.</span></p>
+<h4 id="why-this-gives-multi-scale-position-resolution">Why this gives <em>multi-scale</em> position resolution</h4>
+<p>The previous table looks at absolute angles, but attention reads position information through the <em>dot product</em> $q_i^\top R(\Delta\theta) k_j$ — what actually matters is the <strong>angle difference</strong> $\Delta\theta_{i \to j, k} = (j - i) \cdot \text{freq}_k$, not the absolute angle of either token. So each pair encodes a particular <strong>range of position differences</strong>, and its informativeness drops off outside that range:</p>
+<table>
+<thead>
+<tr>
+<th>$\Delta\theta$ value</th>
+<th>What attention sees</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Near 0 ($\Delta\theta \ll 1$)</td>
+<td>$\cos\Delta\theta \approx 1$ — looks like no position offset</td>
+</tr>
+<tr>
+<td>Around 1 to $\pi$ rad</td>
+<td>Informative — distinguishable signal</td>
+</tr>
+<tr>
+<td>Past $\pi$, wrapping toward $2\pi$</td>
+<td>Aliasing — distant positions collide with closer ones</td>
+</tr>
+</tbody>
+</table>
+<p>The &ldquo;sweet spot&rdquo; for each pair is where $\Delta\theta$ lands in the middle range. For $d_k = 8$, $\Theta = 10\,000$ (frequencies $[1, 0.1, 0.01, 0.001]$):</p>
+<table>
+<thead>
+<tr>
+<th>$\|j - i\|$</th>
+<th>pair 1 (freq 1)</th>
+<th>pair 2 (freq 0.1)</th>
+<th>pair 3 (freq 0.01)</th>
+<th>pair 4 (freq 0.001)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>clear</strong> (1 rad)</td>
+<td>small (0.1)</td>
+<td>tiny</td>
+<td>invisible</td>
+</tr>
+<tr>
+<td>10</td>
+<td>wrapped — noisy</td>
+<td><strong>clear</strong> (1 rad)</td>
+<td>small</td>
+<td>tiny</td>
+</tr>
+<tr>
+<td>100</td>
+<td>noise</td>
+<td>wrapped — noisy</td>
+<td><strong>clear</strong> (1 rad)</td>
+<td>small</td>
+</tr>
+<tr>
+<td>1000</td>
+<td>noise</td>
+<td>noise</td>
+<td>wrapped — noisy</td>
+<td><strong>clear</strong> (1 rad)</td>
+</tr>
+</tbody>
+</table>
+<p>Each pair&rsquo;s sweet spot sits one decade slower than the previous: pair 1 distinguishes immediate neighbors, pair 4 distinguishes positions roughly a thousand apart. Combined, the $d_k/2$ pairs give a <strong>logarithmically spaced Fourier basis over position differences</strong> — fine resolution locally, coarse resolution at long range, with each frequency band handling its own scale.<sup class="margin-marker"><a href="#note-18">18</a></sup><span class="margin-note" id="note-18"><span class="margin-note__label">Note 18</span>This is why &ldquo;smaller angle diff per position step&rdquo; enables longer-range encoding: it lets the slow pair&rsquo;s sweet spot extend out to position differences in the thousands without wrapping. Raising $\Theta$ slides every pair&rsquo;s sweet spot further out, which is the geometric reason the $\Theta$ trick extends usable context length.</span></p>
+<h3 id="implementation-strategy">Implementation strategy</h3>
+<p>Three pieces:</p>
+<ol>
+<li>
+<p><strong>Precompute</strong> the $\cos$ and $\sin$ tables of shape $(\text{max\_seq\_len}, d_k/2)$ in <code>__init__</code>. Each entry is $\cos\theta_{i,k}$ / $\sin\theta_{i,k}$ for token position $i$, pair index $k$. Store with <code>self.register_buffer("cos", ..., persistent=False)</code> — buffers are part of the module&rsquo;s device/dtype tree but <strong>not</strong> parameters and <strong>not</strong> saved to state_dict.</p>
+</li>
+<li>
+<p><strong>Look up</strong> by <code>token_positions</code> in <code>forward</code>. The input <code>x</code> has shape <code>(..., seq_len, d_k)</code>. Split the last dim into pairs (shape <code>(..., seq_len, d_k/2, 2)</code> if reshape, or grab even/odd entries directly), then index the precomputed cos/sin tables by <code>token_positions</code> to get rotation factors of matching shape.</p>
+</li>
+<li>
+<p><strong>Apply the 2D rotation pairwise</strong>:
+   $$\begin{aligned} x'_{2k-1} &= x_{2k-1} \cos\theta_{i,k} - x_{2k} \sin\theta_{i,k} \\ x'_{2k} &= x_{2k-1} \sin\theta_{i,k} + x_{2k} \cos\theta_{i,k} \end{aligned}$$</p>
+</li>
+</ol>
+<p>This is just the 2D rotation matrix multiplication applied element-wise across all pairs and positions. No <code>nn.Parameter</code> anywhere.</p>
+<h3 id="why-precompute-why-a-buffer">Why precompute, why a buffer</h3>
+<ul>
+<li><strong>No learnable params</strong> — the rotation angles are <em>deterministic functions of position</em>, not learned. The PDF is explicit: don&rsquo;t use <code>nn.Parameter</code>, use <code>register_buffer(persistent=False)</code>.</li>
+<li><strong><code>persistent=False</code></strong> — the buffer doesn&rsquo;t get saved/loaded by <code>state_dict</code>. Since it&rsquo;s fully reconstructible from <code>theta</code>, <code>d_k</code>, and <code>max_seq_len</code>, there&rsquo;s no point persisting it. (It would also blow up checkpoint size for long context.)</li>
+<li><strong>Single RoPE module shared across all layers</strong> — every Transformer block applies the same rotation rules to its $Q$ and $K$. The PDF suggests a single module referenced by all layers, which makes the precompute amortize across the whole model.</li>
+</ul>
+<h3 id="convention-gotcha-adjacent-pair-vs-halved-pair-layout">Convention gotcha: adjacent-pair vs. halved-pair layout</h3>
+<p>A subtle bug worth knowing about: the <em>math</em> of RoPE is layout-agnostic at the attention dot-product level (Q^⊤K is just $\sum_i Q_i K_i$, which doesn&rsquo;t care how pair components are arranged in $d_k$), but the <em>element-wise output tensor</em> is layout-specific. Two valid conventions in the literature:</p>
+<table>
+<thead>
+<tr>
+<th>Convention</th>
+<th>Pair $k$ contains&hellip;</th>
+<th>Output assembly</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Adjacent-pair</strong> (PDF, Su et al. original)</td>
+<td>$(x_{2k}, x_{2k+1})$ — consecutive dims</td>
+<td>Interleave rotated halves: <code>stack(..., dim=-1).flatten(-2)</code></td>
+</tr>
+<tr>
+<td><strong>Halved-pair</strong> (Llama, GPU-friendly)</td>
+<td>$(x_k, x_{k+d_k/2})$ — first half + second half</td>
+<td>Concatenate rotated halves: <code>cat(..., dim=-1)</code></td>
+</tr>
+</tbody>
+</table>
+<p>The implementation here uses adjacent-pair (matching the PDF). A <em>consistent</em> halved-pair implementation would also work — and would produce identical attention scores in a self-contained model — but it would fail this assignment&rsquo;s test (which compares element-by-element against an adjacent-pair reference) and break compatibility with Llama-format pretrained weights.<sup class="margin-marker"><a href="#note-19">19</a></sup><span class="margin-note" id="note-19"><span class="margin-note__label">Note 19</span>The trap: splitting with adjacent indexing (<code>::2</code>, <code>1::2</code>) but assembling with halved concatenation (<code>torch.cat</code>) produces a <em>hybrid</em> layout that matches neither standard. The rotations are mathematically correct but the output ordering is non-standard — element-wise wrong, but dot-product correct if used end-to-end. The lesson: tensor layout is part of the contract between modules. Two equivalent maths produce different bytes; the test enforces canonical bytes.</span></p>
+<p><em>From <code>cs336/assignments/assignment1/assignment1-basics/cs336_basics/rope.py::RoPE</code>:</em></p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">RoPE</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">theta</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">d_k</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">max_seq_len</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">device</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">theta</span> <span class="o">=</span> <span class="n">theta</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">d_k</span> <span class="o">=</span> <span class="n">d_k</span>  <span class="c1"># per-head dimension d_k = d_model / n_heads</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">max_seq_len</span> <span class="o">=</span> <span class="n">max_seq_len</span>
+        <span class="n">k_range</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">d_k</span> <span class="o">//</span> <span class="mi">2</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span><span class="o">.</span><span class="n">float</span><span class="p">()</span>
+        <span class="n">positions</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">max_seq_len</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span><span class="o">.</span><span class="n">float</span><span class="p">()</span>
+        <span class="n">freqs</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">/</span> <span class="p">(</span><span class="n">theta</span> <span class="o">**</span> <span class="p">((</span><span class="mi">2</span> <span class="o">*</span> <span class="n">k_range</span> <span class="o">-</span> <span class="mi">2</span><span class="p">)</span> <span class="o">/</span> <span class="n">d_k</span><span class="p">))</span>
+        <span class="n">angles</span> <span class="o">=</span> <span class="n">einsum</span><span class="p">(</span><span class="n">positions</span><span class="p">,</span> <span class="n">freqs</span><span class="p">,</span> <span class="s2">&quot;p, k -&gt; p k&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">register_buffer</span><span class="p">(</span><span class="s2">&quot;cos_cache&quot;</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">angles</span><span class="p">),</span> <span class="n">persistent</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">register_buffer</span><span class="p">(</span><span class="s2">&quot;sin_cache&quot;</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">angles</span><span class="p">),</span> <span class="n">persistent</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+    <span class="nd">@jaxtyped</span><span class="p">(</span><span class="n">typechecker</span><span class="o">=</span><span class="n">beartype</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... seq_len d_k&quot;</span><span class="p">],</span> <span class="n">token_positions</span><span class="p">:</span> <span class="n">Int</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... seq_len&quot;</span><span class="p">]</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... seq_len d_k&quot;</span><span class="p">]:</span>
+        <span class="n">cos</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... seq_len d_k_half&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cos_cache</span><span class="p">[</span><span class="n">token_positions</span><span class="p">]</span>
+        <span class="n">sin</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... seq_len d_k_half&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sin_cache</span><span class="p">[</span><span class="n">token_positions</span><span class="p">]</span>
+        <span class="n">x_even</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... seq_len d_k_half&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">::</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">x_odd</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... seq_len d_k_half&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">1</span><span class="p">::</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">rotated_even</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... seq_len d_k_half&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">x_even</span> <span class="o">*</span> <span class="n">cos</span> <span class="o">-</span> <span class="n">x_odd</span> <span class="o">*</span> <span class="n">sin</span>
+        <span class="n">rotated_odd</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... seq_len d_k_half&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">x_even</span> <span class="o">*</span> <span class="n">sin</span> <span class="o">+</span> <span class="n">x_odd</span> <span class="o">*</span> <span class="n">cos</span>
+        <span class="c1"># Interleave rotated_even and rotated_odd back into adjacent-pair layout:</span>
+        <span class="c1"># stack adds an inner size-2 dim, flatten merges (d_k/2, 2) → d_k.</span>
+        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span><span class="n">rotated_even</span><span class="p">,</span> <span class="n">rotated_odd</span><span class="p">],</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">flatten</span><span class="p">(</span><span class="n">start_dim</span><span class="o">=-</span><span class="mi">2</span><span class="p">)</span>
 </code></pre></div>
         </div>
       </article>

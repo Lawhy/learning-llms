@@ -274,3 +274,66 @@ If `x` is float16 with values near $\pm 1$, squaring gives ${\sim}1$ — fine. B
 The handout (§3.3.1) lists `RMSNorm: 1` — the gain vector starts at all ones, not Xavier-scaled. At initialization, RMSNorm is the identity map (scaled by unit RMS), so signal passes through untouched. The `g_i` parameters only deviate from 1 if training discovers per-dimension scale corrections actually help — which in practice they barely do, so the gain stays close to 1 throughout. This is a common pattern for normalization layers: a learnable rescaler that defaults to "no rescaling" and rarely strays far.
 
 {{ include: cs336/assignments/assignment1/assignment1-basics/cs336_basics/rms_norm.py::RMSNorm }}
+
+---
+
+## Problem `positionwise_feedforward` — SwiGLU FFN
+
+<span class="heading-meta">2 points</span>
+
+**Question:** Implement the position-wise feed-forward network as SwiGLU:
+
+$$\text{FFN}(x) = W_2\big(\text{SiLU}(W_1 x) \odot W_3 x\big), \qquad \text{SiLU}(x) = x \cdot \sigma(x)$$
+
+with $W_1, W_3 \in \mathbb{R}^{d_\text{ff} \times d_\text{model}}$, $W_2 \in \mathbb{R}^{d_\text{model} \times d_\text{ff}}$, no biases, and $d_\text{ff} \approx \tfrac{8}{3} d_\text{model}$ rounded to a multiple of 64.
+
+**Verifying test:** `uv run pytest -k test_swiglu` &mdash; **passes (1/1)**. (And the standalone `test_silu_matches_pytorch` also passes via the `silu` helper.)
+
+### Design intuition
+
+The original Transformer FFN was a single stream — *up-project, ReLU, down-project*. SwiGLU restructures this into two **parallel** up-projections that combine *multiplicatively* before being projected back down:
+
+| | Vanilla FFN | SwiGLU |
+|--|--|--|
+| Functional form | $W_2 \cdot \text{ReLU}(W_1 x)$ | $W_2 \cdot (\text{SiLU}(W_1 x) \odot W_3 x)$ |
+| Per-feature computation | Pointwise nonlinear | Bilinear (gate × value) |
+| Matrices | 2 | 3 |
+
+The extra matrix isn't free expressiveness — it's a *structural change* in how features combine. Each output feature is now a sum of `d_ff` terms of the form $(\text{gated activation}) \cdot (\text{linear value})$ rather than just $\text{nonlinear}(\text{linear})$.
+
+### The gating lens
+
+The Hadamard product $\text{SiLU}(W_1 x) \odot W_3 x$ implements **conditional computation**: the gate ($\text{SiLU}(W_1 x)$, roughly sigmoid-shaped) decides *whether* each value-stream feature is relevant in this context, and the value ($W_3 x$) provides the *magnitude/direction*. This decouples "is this pattern present?" from "with what strength?" — a vanilla ReLU FFN has to encode both signals in one scalar per neuron.
+
+The same gating principle appears in LSTM forget gates, attention's softmax weighting, mixture-of-experts routing, and highway networks.<sup class="margin-marker"><a href="#note-13">13</a></sup><span class="margin-note" id="note-13"><span class="margin-note__label">Note 13</span>One mechanistic interpretability lens: each FFN neuron acts like a key-value memory. Vanilla FFN gives each neuron *one* key (the ReLU detector). SwiGLU gives each neuron *two* keys — a gate detector and a value detector — so detection and magnitude can be encoded independently. This is hand-wavy but matches the empirical observation that gated FFNs reliably outperform non-gated ones by 1–2% on perplexity.</span> SwiGLU is the smallest version of "compute something AND decide how much it matters" applied inside a feedforward block.
+
+### Why the magic 8/3
+
+Total parameter counts in the two FFN forms:
+
+- **Vanilla**, $d_\text{ff} = 4 d_\text{model}$: two matrices of size $4 d_\text{model}^2$ → **$8 d_\text{model}^2$ total**.
+- **SwiGLU**, $d_\text{ff} = \tfrac{8}{3} d_\text{model}$: three matrices of size $\tfrac{8}{3} d_\text{model}^2$ → **$8 d_\text{model}^2$ total**.
+
+The factor $\tfrac{8}{3}$ is the unique rescaling that swaps a ReLU FFN for SwiGLU at **identical parameter cost**.<sup class="margin-marker"><a href="#note-14">14</a></sup><span class="margin-note" id="note-14"><span class="margin-note__label">Note 14</span>Rounding to a multiple of 64 aligns with GPU tensor-core preferences — e.g. $\tfrac{8}{3} \cdot 4096 = 10923$ rounded becomes $10944 = 171 \cdot 64$. This is a hardware optimization, not a learning argument; the model trains fine at the unrounded value, just slightly slower.</span> No extra capacity, but reshaped into the gate-value-down structure.
+
+### Why SiLU over ReLU
+
+Three properties: (1) **smooth at 0** — differentiable everywhere, no kink → smoother loss landscape; (2) **non-monotonic** — small negative dip around $x = -1$ that the network can use; (3) **self-gating** — $x \cdot \sigma(x)$ already has a gate-like shape built in, so SwiGLU effectively stacks gates within gates. GELU (BERT/GPT-2's choice) is qualitatively similar; SiLU is slightly cheaper.
+
+### What the network gains, empirically
+
+The headline result from Shazeer's original paper: SwiGLU outperforms ReLU FFN by ~1–2% on language modeling perplexity at matched parameter count, across model scales. Llama, PaLM, Gemma, Mistral all use it. The improvement is small but reliable — large enough to justify the structural complexity, small enough that Shazeer himself wrote:
+
+> "We offer no explanation as to why these architectures seem to work; we attribute their success, as all else, to divine benevolence."
+
+The architecture works; the precise reason is still debated.
+
+### Implementation notes
+
+`SwiGLU` is composed from three of our existing `Linear` submodules — no manual `nn.Parameter` plumbing needed. The init formula falls out automatically: each `Linear` sees its own `(in_features, out_features)` pair and applies the truncated Xavier the handout prescribes, with $\sigma$ identical across all three matrices (they share the same $d_\text{in} + d_\text{out} = d_\text{model} + d_\text{ff}$).
+
+`SiLU` is a top-level function rather than an `nn.Module` because it has no parameters and isn't reused as a sub-component anywhere else; making it a Module would add ceremony without benefit. `torch.sigmoid` is used directly per the handout's note (numerical stability — don't roll your own).<sup class="margin-marker"><a href="#note-15">15</a></sup><span class="margin-note" id="note-15"><span class="margin-note__label">Note 15</span>Two structural symmetries make the forward a one-liner: (1) both gate ($W_1 x$) and value ($W_3 x$) branches produce tensors of identical shape `(..., d_ff)`, so the Hadamard product is direct; (2) `d_ff` is the caller's responsibility — the module takes it as a constructor arg rather than computing $\tfrac{8}{3} d_\text{model}$ internally, which keeps the "round to a multiple of 64" hardware tweak out of the model code.</span>
+
+{{ include: cs336/assignments/assignment1/assignment1-basics/cs336_basics/swiglu.py::SwiGLU }}
+
+{{ include: cs336/assignments/assignment1/assignment1-basics/cs336_basics/swiglu.py::silu }}

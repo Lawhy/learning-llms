@@ -33,6 +33,7 @@
           <li><a href="#problem-linear-implementing-the-linear-module" data-toc>Problem linear — Implementing the Linear Module</a></li>
           <li><a href="#problem-embedding-implementing-the-embedding-module" data-toc>Problem embedding — Implementing the Embedding Module</a></li>
           <li><a href="#problem-rmsnorm-root-mean-square-layer-normalization" data-toc>Problem rmsnorm — Root Mean Square Layer Normalization</a></li>
+          <li><a href="#problem-positionwise_feedforward-swiglu-ffn" data-toc>Problem positionwise_feedforward — SwiGLU FFN</a></li>
         </ul>
       </nav>
 
@@ -453,6 +454,93 @@
         <span class="n">normed</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... d_model&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">x</span> <span class="o">/</span> <span class="n">rms</span>
         <span class="n">result</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... d_model&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">normed</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span>
         <span class="k">return</span> <span class="n">result</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">in_dtype</span><span class="p">)</span>
+</code></pre></div>
+
+<hr />
+<h2 id="problem-positionwise_feedforward-swiglu-ffn">Problem <code>positionwise_feedforward</code> — SwiGLU FFN</h2>
+<p><span class="heading-meta">2 points</span></p>
+<p><strong>Question:</strong> Implement the position-wise feed-forward network as SwiGLU:</p>
+<p>$$\text{FFN}(x) = W_2\big(\text{SiLU}(W_1 x) \odot W_3 x\big), \qquad \text{SiLU}(x) = x \cdot \sigma(x)$$</p>
+<p>with $W_1, W_3 \in \mathbb{R}^{d_\text{ff} \times d_\text{model}}$, $W_2 \in \mathbb{R}^{d_\text{model} \times d_\text{ff}}$, no biases, and $d_\text{ff} \approx \tfrac{8}{3} d_\text{model}$ rounded to a multiple of 64.</p>
+<p><strong>Verifying test:</strong> <code>uv run pytest -k test_swiglu</code> &mdash; <strong>passes (1/1)</strong>. (And the standalone <code>test_silu_matches_pytorch</code> also passes via the <code>silu</code> helper.)</p>
+<h3 id="design-intuition">Design intuition</h3>
+<p>The original Transformer FFN was a single stream — <em>up-project, ReLU, down-project</em>. SwiGLU restructures this into two <strong>parallel</strong> up-projections that combine <em>multiplicatively</em> before being projected back down:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Vanilla FFN</th>
+<th>SwiGLU</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Functional form</td>
+<td>$W_2 \cdot \text{ReLU}(W_1 x)$</td>
+<td>$W_2 \cdot (\text{SiLU}(W_1 x) \odot W_3 x)$</td>
+</tr>
+<tr>
+<td>Per-feature computation</td>
+<td>Pointwise nonlinear</td>
+<td>Bilinear (gate × value)</td>
+</tr>
+<tr>
+<td>Matrices</td>
+<td>2</td>
+<td>3</td>
+</tr>
+</tbody>
+</table>
+<p>The extra matrix isn&rsquo;t free expressiveness — it&rsquo;s a <em>structural change</em> in how features combine. Each output feature is now a sum of <code>d_ff</code> terms of the form $(\text{gated activation}) \cdot (\text{linear value})$ rather than just $\text{nonlinear}(\text{linear})$.</p>
+<h3 id="the-gating-lens">The gating lens</h3>
+<p>The Hadamard product $\text{SiLU}(W_1 x) \odot W_3 x$ implements <strong>conditional computation</strong>: the gate ($\text{SiLU}(W_1 x)$, roughly sigmoid-shaped) decides <em>whether</em> each value-stream feature is relevant in this context, and the value ($W_3 x$) provides the <em>magnitude/direction</em>. This decouples &ldquo;is this pattern present?&rdquo; from &ldquo;with what strength?&rdquo; — a vanilla ReLU FFN has to encode both signals in one scalar per neuron.</p>
+<p>The same gating principle appears in LSTM forget gates, attention&rsquo;s softmax weighting, mixture-of-experts routing, and highway networks.<sup class="margin-marker"><a href="#note-13">13</a></sup><span class="margin-note" id="note-13"><span class="margin-note__label">Note 13</span>One mechanistic interpretability lens: each FFN neuron acts like a key-value memory. Vanilla FFN gives each neuron <em>one</em> key (the ReLU detector). SwiGLU gives each neuron <em>two</em> keys — a gate detector and a value detector — so detection and magnitude can be encoded independently. This is hand-wavy but matches the empirical observation that gated FFNs reliably outperform non-gated ones by 1–2% on perplexity.</span> SwiGLU is the smallest version of &ldquo;compute something AND decide how much it matters&rdquo; applied inside a feedforward block.</p>
+<h3 id="why-the-magic-83">Why the magic 8/3</h3>
+<p>Total parameter counts in the two FFN forms:</p>
+<ul>
+<li><strong>Vanilla</strong>, $d_\text{ff} = 4 d_\text{model}$: two matrices of size $4 d_\text{model}^2$ → <strong>$8 d_\text{model}^2$ total</strong>.</li>
+<li><strong>SwiGLU</strong>, $d_\text{ff} = \tfrac{8}{3} d_\text{model}$: three matrices of size $\tfrac{8}{3} d_\text{model}^2$ → <strong>$8 d_\text{model}^2$ total</strong>.</li>
+</ul>
+<p>The factor $\tfrac{8}{3}$ is the unique rescaling that swaps a ReLU FFN for SwiGLU at <strong>identical parameter cost</strong>.<sup class="margin-marker"><a href="#note-14">14</a></sup><span class="margin-note" id="note-14"><span class="margin-note__label">Note 14</span>Rounding to a multiple of 64 aligns with GPU tensor-core preferences — e.g. $\tfrac{8}{3} \cdot 4096 = 10923$ rounded becomes $10944 = 171 \cdot 64$. This is a hardware optimization, not a learning argument; the model trains fine at the unrounded value, just slightly slower.</span> No extra capacity, but reshaped into the gate-value-down structure.</p>
+<h3 id="why-silu-over-relu">Why SiLU over ReLU</h3>
+<p>Three properties: (1) <strong>smooth at 0</strong> — differentiable everywhere, no kink → smoother loss landscape; (2) <strong>non-monotonic</strong> — small negative dip around $x = -1$ that the network can use; (3) <strong>self-gating</strong> — $x \cdot \sigma(x)$ already has a gate-like shape built in, so SwiGLU effectively stacks gates within gates. GELU (BERT/GPT-2&rsquo;s choice) is qualitatively similar; SiLU is slightly cheaper.</p>
+<h3 id="what-the-network-gains-empirically">What the network gains, empirically</h3>
+<p>The headline result from Shazeer&rsquo;s original paper: SwiGLU outperforms ReLU FFN by ~1–2% on language modeling perplexity at matched parameter count, across model scales. Llama, PaLM, Gemma, Mistral all use it. The improvement is small but reliable — large enough to justify the structural complexity, small enough that Shazeer himself wrote:</p>
+<blockquote>
+<p>&ldquo;We offer no explanation as to why these architectures seem to work; we attribute their success, as all else, to divine benevolence.&rdquo;</p>
+</blockquote>
+<p>The architecture works; the precise reason is still debated.</p>
+<h3 id="implementation-notes">Implementation notes</h3>
+<p><code>SwiGLU</code> is composed from three of our existing <code>Linear</code> submodules — no manual <code>nn.Parameter</code> plumbing needed. The init formula falls out automatically: each <code>Linear</code> sees its own <code>(in_features, out_features)</code> pair and applies the truncated Xavier the handout prescribes, with $\sigma$ identical across all three matrices (they share the same $d_\text{in} + d_\text{out} = d_\text{model} + d_\text{ff}$).</p>
+<p><code>SiLU</code> is a top-level function rather than an <code>nn.Module</code> because it has no parameters and isn&rsquo;t reused as a sub-component anywhere else; making it a Module would add ceremony without benefit. <code>torch.sigmoid</code> is used directly per the handout&rsquo;s note (numerical stability — don&rsquo;t roll your own).<sup class="margin-marker"><a href="#note-15">15</a></sup><span class="margin-note" id="note-15"><span class="margin-note__label">Note 15</span>Two structural symmetries make the forward a one-liner: (1) both gate ($W_1 x$) and value ($W_3 x$) branches produce tensors of identical shape <code>(..., d_ff)</code>, so the Hadamard product is direct; (2) <code>d_ff</code> is the caller&rsquo;s responsibility — the module takes it as a constructor arg rather than computing $\tfrac{8}{3} d_\text{model}$ internally, which keeps the &ldquo;round to a multiple of 64&rdquo; hardware tweak out of the model code.</span></p>
+<p><em>From <code>cs336/assignments/assignment1/assignment1-basics/cs336_basics/swiglu.py::SwiGLU</code>:</em></p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">SwiGLU</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">d_model</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">d_ff</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">device</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dtype</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">d_model</span> <span class="o">=</span> <span class="n">d_model</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">d_ff</span> <span class="o">=</span> <span class="n">d_ff</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">linear1</span> <span class="o">=</span> <span class="n">Linear</span><span class="p">(</span><span class="n">d_model</span><span class="p">,</span> <span class="n">d_ff</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">linear2</span> <span class="o">=</span> <span class="n">Linear</span><span class="p">(</span><span class="n">d_ff</span><span class="p">,</span> <span class="n">d_model</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">linear3</span> <span class="o">=</span> <span class="n">Linear</span><span class="p">(</span><span class="n">d_model</span><span class="p">,</span> <span class="n">d_ff</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+
+    <span class="nd">@jaxtyped</span><span class="p">(</span><span class="n">typechecker</span><span class="o">=</span><span class="n">beartype</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... d_model&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... d_model&quot;</span><span class="p">]:</span>
+        <span class="n">w1x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... d_ff&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">linear1</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">w3x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... d_ff&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">linear3</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">linear2</span><span class="p">(</span><span class="n">silu</span><span class="p">(</span><span class="n">w1x</span><span class="p">)</span> <span class="o">*</span> <span class="n">w3x</span><span class="p">)</span>
+</code></pre></div>
+
+<p><em>From <code>cs336/assignments/assignment1/assignment1-basics/cs336_basics/swiglu.py::silu</code>:</em></p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">silu</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... d_ff&quot;</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Float</span><span class="p">[</span><span class="n">Tensor</span><span class="p">,</span> <span class="s2">&quot; ... d_ff&quot;</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply the SiLU activation function to a tensor.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        x (Float[Tensor, &quot; ... d_ff&quot;]): The input tensor.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Float[Tensor, &quot; ... d_ff&quot;]: The output tensor.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">x</span> <span class="o">*</span> <span class="n">torch</span><span class="o">.</span><span class="n">sigmoid</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
 </code></pre></div>
         </div>
       </article>
